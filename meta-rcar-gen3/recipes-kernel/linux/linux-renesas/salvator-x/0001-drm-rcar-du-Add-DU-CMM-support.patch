@@ -1,4 +1,4 @@
-From 406a2ab8abacac97d04b942aa1bc88a76aa6cbb0 Mon Sep 17 00:00:00 2001
+From 986eb7e625c298175202e66ba15b8744d4527ac5 Mon Sep 17 00:00:00 2001
 From: Takashi Saito <takashi.saitou.ry@renesas.com>
 Date: Wed, 16 Dec 2015 15:44:08 +0900
 Subject: [PATCH 1/1] drm: rcar-du: Add DU CMM support
@@ -9,12 +9,12 @@ Signed-off-by: Takashi Saito <takashi.saitou.ry@renesas.com>
  drivers/gpu/drm/rcar-du/rcar_du_cmm.c   | 1023 +++++++++++++++++++++++++++++++
  drivers/gpu/drm/rcar-du/rcar_du_crtc.c  |   31 +-
  drivers/gpu/drm/rcar-du/rcar_du_crtc.h  |   23 +
- drivers/gpu/drm/rcar-du/rcar_du_drv.c   |   22 +-
+ drivers/gpu/drm/rcar-du/rcar_du_drv.c   |   25 +-
  drivers/gpu/drm/rcar-du/rcar_du_drv.h   |    3 +
  drivers/gpu/drm/rcar-du/rcar_du_group.c |    5 +
  drivers/gpu/drm/rcar-du/rcar_du_regs.h  |   90 +++
  include/uapi/drm/rcar_du_drm.h          |  113 ++++
- 9 files changed, 1307 insertions(+), 5 deletions(-)
+ 9 files changed, 1309 insertions(+), 6 deletions(-)
  create mode 100644 drivers/gpu/drm/rcar-du/rcar_du_cmm.c
 
 diff --git a/drivers/gpu/drm/rcar-du/Makefile b/drivers/gpu/drm/rcar-du/Makefile
@@ -1060,7 +1060,7 @@ index 0000000..41e67cf
 +
 +
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_crtc.c b/drivers/gpu/drm/rcar-du/rcar_du_crtc.c
-index 1dfb3a4..d0a4edf 100644
+index a971eb7..2fbbb13 100644
 --- a/drivers/gpu/drm/rcar-du/rcar_du_crtc.c
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_crtc.c
 @@ -247,9 +247,20 @@ static void rcar_du_crtc_set_display_timing(struct rcar_du_crtc *rcrtc)
@@ -1107,7 +1107,7 @@ index 1dfb3a4..d0a4edf 100644
  	/* Disable all planes and wait for the change to take effect. This is
  	 * required as the DSnPR registers are updated on vblank, and no vblank
  	 * will occur once the CRTC is stopped. Disabling planes when starting
-@@ -698,6 +715,10 @@ static irqreturn_t rcar_du_crtc_irq(int irq, void *arg)
+@@ -693,6 +710,10 @@ static irqreturn_t rcar_du_crtc_irq(int irq, void *arg)
  	if (status & DSSR_FRM) {
  		drm_handle_vblank(rcrtc->crtc.dev, rcrtc->index);
  		rcar_du_crtc_finish_page_flip(rcrtc);
@@ -1118,7 +1118,7 @@ index 1dfb3a4..d0a4edf 100644
  		ret = IRQ_HANDLED;
  	}
  
-@@ -800,6 +821,10 @@ int rcar_du_crtc_create(struct rcar_du_group *rgrp, unsigned int index)
+@@ -795,6 +816,10 @@ int rcar_du_crtc_create(struct rcar_du_group *rgrp, unsigned int index)
  		return ret;
  	}
  
@@ -1169,10 +1169,10 @@ index 064fb48..83ebf9e 100644
 +
  #endif /* __RCAR_DU_CRTC_H__ */
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_drv.c b/drivers/gpu/drm/rcar-du/rcar_du_drv.c
-index 344c7fb..b9106a4 100644
+index 092180a..11034d7 100644
 --- a/drivers/gpu/drm/rcar-du/rcar_du_drv.c
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_drv.c
-@@ -100,7 +100,8 @@ static const struct rcar_du_device_info rcar_du_r8a7790_info = {
+@@ -102,7 +102,8 @@ static const struct rcar_du_device_info rcar_du_r8a7790_info = {
  static const struct rcar_du_device_info rcar_du_r8a7791_info = {
  	.gen = 2,
  	.features = RCAR_DU_FEATURE_CRTC_IRQ_CLOCK
@@ -1182,17 +1182,27 @@ index 344c7fb..b9106a4 100644
  	.num_crtcs = 2,
  	.routes = {
  		/* R8A779[13] has one RGB output, one LVDS output and one
-@@ -149,7 +150,8 @@ static const struct rcar_du_device_info rcar_du_r8a7795_info = {
+@@ -152,7 +153,8 @@ static const struct rcar_du_device_info rcar_du_r8a7795_info = {
+ 	.features = RCAR_DU_FEATURE_CRTC_IRQ_CLOCK
+ 		  | RCAR_DU_FEATURE_EXT_CTRL_REGS
+ 		  | RCAR_DU_FEATURE_VSP1_SOURCE
+-		  | RCAR_DU_FEATURE_DIDSR2_REG,
++		  | RCAR_DU_FEATURE_DIDSR2_REG
++		  | RCAR_DU_FEATURE_CMM | RCAR_DU_FEATURE_CMM_FBUF,
+ 	.num_crtcs = 4,
+ 	.routes = {
+ 		/* R8A7795 has one RGB output, one LVDS output and two
+@@ -187,7 +189,8 @@ static const struct rcar_du_device_info rcar_du_r8a7796_info = {
  	.gen = 3,
  	.features = RCAR_DU_FEATURE_CRTC_IRQ_CLOCK
  		  | RCAR_DU_FEATURE_EXT_CTRL_REGS
 -		  | RCAR_DU_FEATURE_VSP1_SOURCE,
 +		  | RCAR_DU_FEATURE_VSP1_SOURCE
 +		  | RCAR_DU_FEATURE_CMM | RCAR_DU_FEATURE_CMM_FBUF,
- 	.num_crtcs = 4,
+ 	.num_crtcs = 3,
  	.routes = {
- 		/* R8A7795 has one RGB output, one LVDS output and two
-@@ -255,6 +257,22 @@ int rcar_du_set_vmute(struct drm_device *dev, void *data,
+ 		/* R8A7796 has one RGB output, one LVDS output and one
+@@ -311,6 +314,22 @@ int rcar_du_set_vmute(struct drm_device *dev, void *data,
  static const struct drm_ioctl_desc rcar_du_ioctls[] = {
  	DRM_IOCTL_DEF_DRV(DRM_RCAR_DU_SET_VMUTE, rcar_du_set_vmute,
  		DRM_UNLOCKED | DRM_CONTROL_ALLOW),
@@ -1214,14 +1224,14 @@ index 344c7fb..b9106a4 100644
 +		DRM_UNLOCKED | DRM_CONTROL_ALLOW),
  };
  
- 
+ static const struct file_operations rcar_du_fops = {
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_drv.h b/drivers/gpu/drm/rcar-du/rcar_du_drv.h
-index ebf3a55..1bda32d 100644
+index c03f952..238b868 100644
 --- a/drivers/gpu/drm/rcar-du/rcar_du_drv.h
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_drv.h
-@@ -32,6 +32,9 @@ struct rcar_du_lvdsenc;
- #define RCAR_DU_FEATURE_EXT_CTRL_REGS	(1 << 1)	/* Has extended control registers */
+@@ -33,6 +33,9 @@ struct rcar_du_lvdsenc;
  #define RCAR_DU_FEATURE_VSP1_SOURCE	(1 << 2)	/* Has inputs from VSP1 */
+ #define RCAR_DU_FEATURE_DIDSR2_REG	(1 << 3)	/* Has DIDSR2 register */
  
 +#define RCAR_DU_FEATURE_CMM		(1 << 10)	/* Has DEFR7 register & CMM */
 +#define RCAR_DU_FEATURE_CMM_FBUF	(1 << 11)	/* Has CMM Double buffer */
@@ -1230,10 +1240,10 @@ index ebf3a55..1bda32d 100644
  #define RCAR_DU_QUIRK_LVDS_LANES	(1 << 1)	/* LVDS lanes 1 and 3 inverted */
  
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_group.c b/drivers/gpu/drm/rcar-du/rcar_du_group.c
-index 33b2fc5..ccc9e4d 100644
+index d9b22ba..72f02bc 100644
 --- a/drivers/gpu/drm/rcar-du/rcar_du_group.c
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_group.c
-@@ -120,6 +120,11 @@ static void rcar_du_group_setup(struct rcar_du_group *rgrp)
+@@ -137,6 +137,11 @@ static void rcar_du_group_setup(struct rcar_du_group *rgrp)
  	if (rcdu->info->gen >= 3)
  		rcar_du_group_write(rgrp, DEFR10, DEFR10_CODE | DEFR10_DEFE10);
  
@@ -1246,7 +1256,7 @@ index 33b2fc5..ccc9e4d 100644
  	 * superposition 0 to DU0 pins. DU1 pins will be configured dynamically.
  	 */
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_regs.h b/drivers/gpu/drm/rcar-du/rcar_du_regs.h
-index 2fc1455..4423a72 100644
+index ac0d205..d4e168a 100644
 --- a/drivers/gpu/drm/rcar-du/rcar_du_regs.h
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_regs.h
 @@ -199,6 +199,11 @@
@@ -1261,7 +1271,7 @@ index 2fc1455..4423a72 100644
  /* -----------------------------------------------------------------------------
   * R8A7790-only Control Registers
   */
-@@ -547,4 +552,89 @@
+@@ -549,4 +554,89 @@
  #define GCBCR			0x11098
  #define BCBCR			0x1109c
  
