@@ -11,7 +11,7 @@
 /* DRM_RCAR_DU_CMM_GET_HGO: DU-CMM get histogram */
 struct rcar_du_cmm_table {
 	unsigned int	crtc_id;
-	unsigned int	buff;
+	unsigned int	buff;	/* set DRM_RCAR_DU_CMM_ALLOC handle */
 	unsigned int	buff_len;
 	unsigned long	user_data;
 };
@@ -41,6 +41,14 @@ struct rcar_du_cmm_config {
 	int		lut_buf;
 };
 
+/* DRM_RCAR_DU_CMM_ALLOC: DU-CMM alloc cma buffer */
+/* DRM_RCAR_DU_CMM_FREE: DU-CMM free cma buffer */
+struct rcar_du_cmm_buf {
+	size_t		size;		/* in */
+	uint64_t	mmap_offset;	/* out */
+	uint64_t	phy_addr;	/* out */
+	uint32_t	handle;		/* out */
+};
 
 /* DRM_RCAR_DU_CMM_WAIT_EVENT: DU-CMM done event */
 #define CMM_EVENT_CLU_DONE	1
@@ -89,6 +97,8 @@ struct rcar_du_cmm_config {
 #define DRM_RCAR_DU_CMM_WAIT_EVENT	(DRM_RCAR_DU_CMM_FUNC_BASE + 4)
 #define DRM_RCAR_DU_CMM_CONFIG		(DRM_RCAR_DU_CMM_FUNC_BASE + 5)
 #define DRM_RCAR_DU_CMM_SET_LUT		(DRM_RCAR_DU_CMM_FUNC_BASE + 6)
+#define DRM_RCAR_DU_CMM_ALLOC		(DRM_RCAR_DU_CMM_FUNC_BASE + 7)
+#define DRM_RCAR_DU_CMM_FREE		(DRM_RCAR_DU_CMM_FUNC_BASE + 8)
 
 /* DU-CMM ioctl */
 #define DRM_IOCTL_RCAR_DU_CMM_SET_CLU \
@@ -118,5 +128,13 @@ struct rcar_du_cmm_config {
 #define DRM_IOCTL_RCAR_DU_CMM_SET_LUT \
 	DRM_IOW(DRM_COMMAND_BASE + DRM_RCAR_DU_CMM_SET_LUT, \
 		struct rcar_du_cmm_table)
+
+#define DRM_IOCTL_RCAR_DU_CMM_ALLOC \
+	DRM_IOWR(DRM_COMMAND_BASE + DRM_RCAR_DU_CMM_ALLOC, \
+		struct rcar_du_cmm_buf)
+
+#define DRM_IOCTL_RCAR_DU_CMM_FREE \
+	DRM_IOW(DRM_COMMAND_BASE + DRM_RCAR_DU_CMM_FREE, \
+		struct rcar_du_cmm_buf)
 
 #endif /* __RCAR_DU_DRM_H__ */

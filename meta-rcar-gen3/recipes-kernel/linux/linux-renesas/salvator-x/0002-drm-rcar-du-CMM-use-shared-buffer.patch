@@ -1,0 +1,580 @@
+From 94c16e55f1590aa2346e2b5f825c469f8cf8f789 Mon Sep 17 00:00:00 2001
+From: Takashi Saito <takashi.saitou.ry@renesas.com>
+Date: Tue, 26 Jan 2016 09:57:34 +0900
+Subject: [PATCH 2/2] drm: rcar-du: CMM: use shared buffer
+
+Signed-off-by: Takashi Saito <takashi.saitou.ry@renesas.com>
+---
+ drivers/gpu/drm/rcar-du/rcar_du_cmm.c  | 262 +++++++++++++++++++--------------
+ drivers/gpu/drm/rcar-du/rcar_du_crtc.h |   5 +
+ drivers/gpu/drm/rcar-du/rcar_du_drv.c  |   4 +
+ include/uapi/drm/rcar_du_drm.h         |  20 ++-
+ 4 files changed, 179 insertions(+), 112 deletions(-)
+
+diff --git a/drivers/gpu/drm/rcar-du/rcar_du_cmm.c b/drivers/gpu/drm/rcar-du/rcar_du_cmm.c
+index 6400288..3b04002 100644
+--- a/drivers/gpu/drm/rcar-du/rcar_du_cmm.c
++++ b/drivers/gpu/drm/rcar-du/rcar_du_cmm.c
+@@ -74,9 +74,7 @@
+ #include "rcar_du_plane.h"
+ #include "rcar_du_regs.h"
+ 
+-
+ /* #define DEBUG_PROCE_TIME 1 */
+-/* TODO:#define USE_DMA 1 */
+ 
+ /* CPF register */
+ #define CPG_BASE	0xE6150000
+@@ -96,14 +94,6 @@
+ 
+ #define EVENT_NUM	30
+ 
+-
+-struct dma_mem {
+-	struct device *dev;
+-	dma_addr_t paddr;
+-	void *vaddr;
+-	unsigned long size;
+-};
+-
+ struct rcar_dma_trans {
+ 	u32 trans_count;
+ 	u32 src_addr;
+@@ -113,29 +103,32 @@ struct rcar_dma_trans {
+ 
+ struct rcar_du_cmm_pendig_event {
+ 	struct list_head link;
+-	unsigned long paddr;
+ 	unsigned int event;
+ 	unsigned long callback_data;
++	void *vaddr;
+ };
+ 
+ struct cmm_lut_t {
+ 	struct list_head list;
+-	struct dma_mem table;
+ 	struct rcar_du_cmm_pendig_event *p;
+ 	int buf_mode;
+ };
+ 
+ struct cmm_clu_t {
+ 	struct list_head list;
+-	struct dma_mem table; /* CLU & HGO temporary buffer */
+ };
+ 
+ struct cmm_hgo_t {
+ 	struct list_head list;
+-	struct dma_mem table; /* CLU & HGO temporary buffer */
+ 	int reset;
+ };
+ 
++struct rcar_du_cmm_buf_list {
++	struct list_head list;
++	struct drm_gem_cma_object *cma_obj;
++	uint32_t handle;
++};
++
+ struct rcar_du_cmm {
+ 	struct rcar_du_crtc *rcrtc;
+ 
+@@ -166,26 +159,11 @@ struct rcar_du_cmm {
+ 	bool table_init;
+ };
+ 
+-static int alloc_dma_memry(struct device *dev, struct dma_mem *dma_mem,
+-				unsigned long size)
+-{
+-	dma_mem->size = size;
+-	dma_mem->dev = dev;
+-	dma_mem->vaddr =
+-		dma_alloc_writecombine(dev, dma_mem->size,
+-			&dma_mem->paddr, GFP_KERNEL);
+ 
+-	if (!dma_mem->vaddr)
+-		return -ENOMEM;
++static void *du_cmm_handle_to_vaddr(uint32_t handle);
+ 
+-	return 0;
+-}
++static LIST_HEAD(cmm_buf_list);
+ 
+-static inline void free_dma_memry(struct dma_mem *dma_mem)
+-{
+-	dma_free_writecombine(dma_mem->dev, dma_mem->size,
+-			dma_mem->vaddr, dma_mem->paddr);
+-}
+ 
+ static inline u32 rcar_du_cmm_read(struct rcar_du_cmm *du_cmm, u32 reg)
+ {
+@@ -315,6 +293,7 @@ int rcar_du_cmm_lut_set(struct drm_device *dev, void *data,
+ 	struct rcar_du_cmm *du_cmm;
+ 	int ret = 0;
+ 	struct rcar_du_cmm_pendig_event *p;
++	void *vaddr;
+ 
+ 	du_cmm = id_to_cmm(dev, table->crtc_id);
+ 	if (du_cmm == NULL)
+@@ -330,11 +309,17 @@ int rcar_du_cmm_lut_set(struct drm_device *dev, void *data,
+ 		goto end;
+ 	}
+ 
++	vaddr = du_cmm_handle_to_vaddr(table->buff);
++	if (!vaddr) {
++		ret = -ENOMEM;
++		goto end;
++	}
++
+ 	p = list_first_entry(&du_cmm->empty_list,
+ 				struct rcar_du_cmm_pendig_event, link);
+ 	list_del(&p->link);
+ 
+-	p->paddr = table->buff;
++	p->vaddr = vaddr;
+ 	p->event = CMM_EVENT_LUT_DONE;
+ 	p->callback_data = table->user_data;
+ 
+@@ -363,6 +348,7 @@ int rcar_du_cmm_clu_set(struct drm_device *dev, void *data,
+ 	struct rcar_du_cmm *du_cmm;
+ 	int ret = 0;
+ 	struct rcar_du_cmm_pendig_event *p;
++	void *vaddr;
+ 
+ 	du_cmm = id_to_cmm(dev, table->crtc_id);
+ 	if (du_cmm == NULL)
+@@ -378,11 +364,17 @@ int rcar_du_cmm_clu_set(struct drm_device *dev, void *data,
+ 		goto end;
+ 	}
+ 
++	vaddr = du_cmm_handle_to_vaddr(table->buff);
++	if (!vaddr) {
++		ret = -ENOMEM;
++		goto end;
++	}
++
+ 	p = list_first_entry(&du_cmm->empty_list,
+ 				struct rcar_du_cmm_pendig_event, link);
+ 	list_del(&p->link);
+ 
+-	p->paddr = table->buff;
++	p->vaddr = vaddr;
+ 	p->event = CMM_EVENT_CLU_DONE;
+ 	p->callback_data = table->user_data;
+ 
+@@ -470,6 +462,7 @@ int rcar_du_cmm_hgo_get(struct drm_device *dev, void *data,
+ 	int ret = 0;
+ 	int i;
+ 	struct rcar_du_cmm_pendig_event *p[2] = {NULL, NULL};
++	void *vaddr;
+ 
+ 	du_cmm = id_to_cmm(dev, table->crtc_id);
+ 	if (du_cmm == NULL)
+@@ -480,6 +473,12 @@ int rcar_du_cmm_hgo_get(struct drm_device *dev, void *data,
+ 
+ 	mutex_lock(&du_cmm->lock);
+ 
++	vaddr = du_cmm_handle_to_vaddr(table->buff);
++	if (!vaddr) {
++		ret = -ENOMEM;
++		goto end;
++	}
++
+ 	for (i = 0; i < 2; i++) {
+ 		if (list_empty(&du_cmm->empty_list)) {
+ 			if (p[0] != NULL)
+@@ -494,13 +493,13 @@ int rcar_du_cmm_hgo_get(struct drm_device *dev, void *data,
+ 	}
+ 
+ 	/* histogram read start event */
+-	p[0]->paddr = table->buff;
++	p[0]->vaddr = NULL;
+ 	p[0]->event = CMM_EVENT_HGO_START;
+ 	p[0]->callback_data = table->user_data;
+ 	list_add_tail(&p[0]->link, &du_cmm->hgo.list);
+ 
+ 	/* histogram read end event */
+-	p[1]->paddr = table->buff;
++	p[1]->vaddr = vaddr;
+ 	p[1]->event = CMM_EVENT_HGO_DONE;
+ 	p[1]->callback_data = table->user_data;
+ 	list_add_tail(&p[1]->link, &du_cmm->hgo.list);
+@@ -652,10 +651,8 @@ end:
+ /* set 1D look up table */
+ static int lut_set(struct rcar_du_cmm *du_cmm,
+ 		   struct rcar_du_cmm_pendig_event *p_lut,
+-		   bool update,
+ 		   bool done)
+ {
+-	int ret = 0;
+ 	int i;
+ 	uint32_t lut_base;
+ 	uint32_t *lut_buf;
+@@ -683,60 +680,37 @@ static int lut_set(struct rcar_du_cmm *du_cmm,
+ 		return -EINVAL;
+ 	}
+ 
+-	lut_buf = du_cmm->lut.table.vaddr;
+-	if (update) {
+-		ret = copy_from_user(lut_buf, (void __user *)p_lut->paddr,
+-				CMM_LUT_NUM * 4);
+-	} else {
+-		ret = 0;
+-	}
+-	if (!ret) {
+-		rcar_du_cmm_write(du_cmm, CMM_CLU_ADDR, 0);
+-		for (i = 0; i < CMM_LUT_NUM; i++)
+-			rcar_du_cmm_write(du_cmm, lut_base + i * 4,
+-						lut_buf[i]);
+-	} else {
+-		pr_err("%s : copy from user faile %d\n", __func__, ret);
+-		if (ret > 0)
+-			ret = -EFAULT;
+-	}
++	lut_buf = p_lut->vaddr;
++	for (i = 0; i < CMM_LUT_NUM; i++)
++		rcar_du_cmm_write(du_cmm, lut_base + i * 4, lut_buf[i]);
+ 
+ 	if (done) {
+ 		list_add_tail(&p_lut->link, &du_cmm->event_list);
+ 		wake_up_interruptible(&du_cmm->event_wait);
+ 	}
+ 
+-	return ret;
++	return 0;
+ }
+ 
+ /* set 3D look up table */
+ static int clu_set(struct rcar_du_cmm *du_cmm,
+ 		   struct rcar_du_cmm_pendig_event *p_clu)
+ {
+-	int ret = 0;
+ 	int i;
+ 	uint32_t *clu_buf;
+ 
+ 	if (p_clu == NULL)
+ 		return 0; /* skip */
+ 
+-	clu_buf = du_cmm->clu.table.vaddr;
+-	ret = copy_from_user(clu_buf, (void __user *)p_clu->paddr,
+-				CMM_CLU_NUM * 4);
+-	if (!ret) {
+-		rcar_du_cmm_write(du_cmm, CMM_CLU_ADDR, 0);
+-		for (i = 0; i < CMM_CLU_NUM; i++)
+-			rcar_du_cmm_write(du_cmm, CMM_CLU_DATA, clu_buf[i]);
+-	} else {
+-		pr_err("%s : copy from user faile %d\n", __func__, ret);
+-		if (ret > 0)
+-			ret = -EFAULT;
+-	}
++	clu_buf = p_clu->vaddr;
++	rcar_du_cmm_write(du_cmm, CMM_CLU_ADDR, 0);
++	for (i = 0; i < CMM_CLU_NUM; i++)
++		rcar_du_cmm_write(du_cmm, CMM_CLU_DATA, clu_buf[i]);
+ 
+ 	list_add_tail(&p_clu->link, &du_cmm->event_list);
+ 	wake_up_interruptible(&du_cmm->event_wait);
+ 
+-	return ret;
++	return 0;
+ }
+ 
+ 
+@@ -745,9 +719,7 @@ static int hgo_get(struct rcar_du_cmm *du_cmm,
+ 		   struct rcar_du_cmm_pendig_event *p_hgo[],
+ 		   bool need_reset)
+ {
+-	int ret = 0;
+ 	int i, j;
+-	uint32_t *hgo_buf;
+ 	const u32 histo_offset[3] = {
+ 		CMM_HGO_R_HISTO_n(0),
+ 		CMM_HGO_G_HISTO_n(0),
+@@ -765,20 +737,11 @@ static int hgo_get(struct rcar_du_cmm *du_cmm,
+ 	wake_up_interruptible(&du_cmm->event_wait);
+ 
+ 	for (i = 0; i < 3; i++) {
+-		unsigned long dist_addr = p_hgo[1]->paddr + CMM_HGO_NUM * 4 * i;
+-
+-		hgo_buf = du_cmm->hgo.table.vaddr;
++		uint32_t *hgo_buf = p_hgo[1]->vaddr + CMM_HGO_NUM * 4 * i;
+ 
+ 		for (j = 0; j < CMM_HGO_NUM; j++)
+ 			hgo_buf[j] = rcar_du_cmm_read(du_cmm,
+ 						histo_offset[i] + j * 4);
+-
+-		if (copy_to_user((void __user *)dist_addr,
+-					hgo_buf, CMM_HGO_NUM * 4)) {
+-			ret = -EFAULT;
+-			pr_err("%s : copy to user faile\n", __func__);
+-			break;
+-		}
+ 	}
+ 
+ 	list_add_tail(&p_hgo[1]->link, &du_cmm->event_list);
+@@ -787,7 +750,7 @@ static int hgo_get(struct rcar_du_cmm *du_cmm,
+ hgo_reset:
+ 	rcar_du_cmm_write(du_cmm, CMM_HGO_REGRST, CMM_HGO_REGRST_RCLEA);
+ 
+-	return ret;
++	return 0;
+ }
+ 
+ 
+@@ -800,7 +763,6 @@ static void du_cmm_work(struct work_struct *work)
+ 	struct rcar_du_cmm_pendig_event *p_clu = NULL;
+ 	struct rcar_du_cmm_pendig_event *p_hgo[2] = {NULL, };
+ 	bool hgo_reset = false;
+-	bool lut_update = false;
+ 	bool lut_done = false;
+ 	int i;
+ #ifdef DEBUG_PROCE_TIME
+@@ -811,7 +773,6 @@ static void du_cmm_work(struct work_struct *work)
+ 	mutex_lock(&du_cmm->lock);
+ 
+ 	if (!list_empty(&du_cmm->lut.list)) {
+-		lut_update = true;
+ 		p_lut = list_first_entry(&du_cmm->lut.list,
+ 				     struct rcar_du_cmm_pendig_event, link);
+ 		list_del(&p_lut->link);
+@@ -864,7 +825,7 @@ static void du_cmm_work(struct work_struct *work)
+ #ifdef DEBUG_PROCE_TIME
+ 	do_gettimeofday(&start_time);
+ #endif
+-	lut_set(du_cmm, p_lut, lut_update, lut_done);
++	lut_set(du_cmm, p_lut, lut_done);
+ #ifdef DEBUG_PROCE_TIME
+ 	do_gettimeofday(&end_time);
+ 	lut_time = (long)diff_timevals(&start_time, &end_time);
+@@ -918,6 +879,111 @@ void rcar_du_cmm_kick(struct rcar_du_crtc *rcrtc)
+ 	}
+ }
+ 
++static void *du_cmm_handle_to_vaddr(uint32_t handle)
++{
++	struct rcar_du_cmm_buf_list *buf_list;
++	void *ptr = NULL;
++
++	list_for_each_entry(buf_list, &cmm_buf_list, list) {
++		if (buf_list->handle == handle) {
++			ptr = buf_list->cma_obj->vaddr;
++			break;
++		}
++	}
++
++	return ptr;
++}
++
++DEFINE_MUTEX(du_cmm_buf_lock);
++
++int rcar_du_cmm_alloc(struct drm_device *dev, void *data,
++			struct drm_file *file_priv)
++{
++	struct rcar_du_cmm_buf *buf = (struct rcar_du_cmm_buf *)data;
++	struct drm_gem_cma_object *cma_obj;
++	struct drm_gem_object *gem_obj;
++	uint32_t handle;
++	u64 offset;
++	int ret;
++	struct rcar_du_cmm_buf_list *buf_list;
++
++	buf->handle = 0;
++
++	buf_list = kzalloc(sizeof(*buf_list), GFP_KERNEL);
++	if (buf_list == NULL)
++		return -ENOMEM;
++
++	mutex_lock(&du_cmm_buf_lock);
++
++	/* create buffer */
++	cma_obj = drm_gem_cma_create(dev, buf->size);
++	if (IS_ERR(cma_obj)) {
++		kfree(buf_list);
++		goto end;
++	}
++
++	gem_obj = &cma_obj->base;
++
++	ret = drm_gem_handle_create(file_priv, gem_obj, &handle);
++	if (ret) {
++		kfree(buf_list);
++		drm_gem_cma_free_object(gem_obj);
++		goto end;
++	}
++
++	drm_gem_object_unreference_unlocked(gem_obj);
++
++	drm_gem_cma_dumb_map_offset(file_priv, dev, handle, &offset);
++
++	/* set return value */
++	buf->handle = handle;
++	buf->mmap_offset = offset;
++	buf->phy_addr = cma_obj->paddr;
++
++	/* add list */
++	buf_list->cma_obj = cma_obj;
++	buf_list->handle = handle;
++	list_add_tail(&buf_list->list, &cmm_buf_list);
++
++end:
++	mutex_unlock(&du_cmm_buf_lock);
++
++	return PTR_ERR_OR_ZERO(cma_obj);
++}
++
++int rcar_du_cmm_free(struct drm_device *dev, void *data,
++			struct drm_file *file_priv)
++{
++	int ret;
++	struct rcar_du_cmm_buf *buf = (struct rcar_du_cmm_buf *)data;
++	struct rcar_du_cmm_buf_list *buf_list;
++	int find = 0;
++
++	mutex_lock(&du_cmm_buf_lock);
++
++	list_for_each_entry(buf_list, &cmm_buf_list, list) {
++		if (buf_list->handle == buf->handle) {
++			find = 1;
++			break;
++		}
++	}
++
++	if (!find) {
++		ret = 0;
++		goto end;
++	}
++
++	list_del(&buf_list->list);
++	kfree(buf_list);
++
++	ret = drm_gem_handle_delete(file_priv, buf->handle);
++
++end:
++	mutex_unlock(&du_cmm_buf_lock);
++
++	return ret;
++}
++
+ 
+ int rcar_du_cmm_init(struct rcar_du_crtc *rcrtc, bool dbuf)
+ {
+@@ -949,26 +1015,6 @@ int rcar_du_cmm_init(struct rcar_du_crtc *rcrtc, bool dbuf)
+ 		goto error_mapping_cmm;
+ 	}
+ 
+-	ret = alloc_dma_memry(rcrtc->group->dev->dev,
+-				&du_cmm->lut.table, CMM_LUT_NUM * 4);
+-	if (ret) {
+-		dev_err(rcdu->dev, "rcar-du cmm init : error alloc LUT table\n");
+-		goto error_alloc_lut_table;
+-	}
+-
+-	ret = alloc_dma_memry(rcrtc->group->dev->dev,
+-				&du_cmm->clu.table, CMM_CLU_NUM * 4);
+-	if (ret) {
+-		dev_err(rcdu->dev, "rcar-du cmm init : error alloc CLU table\n");
+-		goto error_alloc_clu_table;
+-	}
+-	ret = alloc_dma_memry(rcrtc->group->dev->dev,
+-				&du_cmm->hgo.table, CMM_HGO_NUM * 4);
+-	if (ret) {
+-		dev_err(rcdu->dev, "rcar-du cmm init : error alloc HGO table\n");
+-		goto error_alloc_hgo_table;
+-	}
+-
+ 	du_cmm->rcrtc = rcrtc;
+ 
+ 	du_cmm->hgo.reset = 0;
+@@ -1012,12 +1058,6 @@ int rcar_du_cmm_init(struct rcar_du_crtc *rcrtc, bool dbuf)
+ 
+ 	return 0;
+ 
+-error_alloc_hgo_table:
+-	free_dma_memry(&du_cmm->clu.table);
+-error_alloc_clu_table:
+-	free_dma_memry(&du_cmm->lut.table);
+-error_alloc_lut_table:
+-	iounmap(du_cmm->cmm_base);
+ error_mapping_cmm:
+ 	kfree(du_cmm);
+ error_alloc:
+diff --git a/drivers/gpu/drm/rcar-du/rcar_du_crtc.h b/drivers/gpu/drm/rcar-du/rcar_du_crtc.h
+index 8e664b9..9268bbd 100644
+--- a/drivers/gpu/drm/rcar-du/rcar_du_crtc.h
++++ b/drivers/gpu/drm/rcar-du/rcar_du_crtc.h
+@@ -109,4 +109,9 @@ int rcar_du_cmm_wait_event(struct drm_device *dev, void *data,
+ int rcar_du_cmm_config(struct drm_device *dev, void *data,
+ 			struct drm_file *file_priv);
+ 
++int rcar_du_cmm_alloc(struct drm_device *dev, void *data,
++			struct drm_file *file_priv);
++int rcar_du_cmm_free(struct drm_device *dev, void *data,
++			struct drm_file *file_priv);
++
+ #endif /* __RCAR_DU_CRTC_H__ */
+diff --git a/drivers/gpu/drm/rcar-du/rcar_du_drv.c b/drivers/gpu/drm/rcar-du/rcar_du_drv.c
+index 49a9501..d68f678 100644
+--- a/drivers/gpu/drm/rcar-du/rcar_du_drv.c
++++ b/drivers/gpu/drm/rcar-du/rcar_du_drv.c
+@@ -277,6 +277,10 @@ static const struct drm_ioctl_desc rcar_du_ioctls[] = {
+ 		DRM_UNLOCKED | DRM_CONTROL_ALLOW),
+ 	DRM_IOCTL_DEF_DRV(RCAR_DU_CMM_SET_LUT, rcar_du_cmm_lut_set,
+ 		DRM_UNLOCKED | DRM_CONTROL_ALLOW),
++	DRM_IOCTL_DEF_DRV(RCAR_DU_CMM_ALLOC, rcar_du_cmm_alloc,
++		DRM_UNLOCKED | DRM_CONTROL_ALLOW),
++	DRM_IOCTL_DEF_DRV(RCAR_DU_CMM_FREE, rcar_du_cmm_free,
++		DRM_UNLOCKED | DRM_CONTROL_ALLOW),
+ };
+ 
+ static const struct file_operations rcar_du_fops = {
+diff --git a/include/uapi/drm/rcar_du_drm.h b/include/uapi/drm/rcar_du_drm.h
+index 377fe7a..bd3387c 100644
+--- a/include/uapi/drm/rcar_du_drm.h
++++ b/include/uapi/drm/rcar_du_drm.h
+@@ -22,7 +22,7 @@ struct rcar_du_vmute {
+ /* DRM_RCAR_DU_CMM_GET_HGO: DU-CMM get histogram */
+ struct rcar_du_cmm_table {
+ 	unsigned int	crtc_id;
+-	unsigned int	buff;
++	unsigned int	buff;	/* set DRM_RCAR_DU_CMM_ALLOC handle */
+ 	unsigned int	buff_len;
+ 	unsigned long	user_data;
+ };
+@@ -52,6 +52,14 @@ struct rcar_du_cmm_config {
+ 	int		lut_buf;
+ };
+ 
++/* DRM_RCAR_DU_CMM_ALLOC: DU-CMM alloc cma buffer */
++/* DRM_RCAR_DU_CMM_FREE: DU-CMM free cma buffer */
++struct rcar_du_cmm_buf {
++	size_t		size;		/* in */
++	uint64_t	mmap_offset;	/* out */
++	uint64_t	phy_addr;	/* out */
++	uint32_t	handle;		/* out */
++};
+ 
+ /* DRM_RCAR_DU_CMM_WAIT_EVENT: DU-CMM done event */
+ #define CMM_EVENT_CLU_DONE	1
+@@ -102,6 +110,8 @@ struct rcar_du_cmm_config {
+ #define DRM_RCAR_DU_CMM_WAIT_EVENT	(DRM_RCAR_DU_CMM_FUNC_BASE + 4)
+ #define DRM_RCAR_DU_CMM_CONFIG		(DRM_RCAR_DU_CMM_FUNC_BASE + 5)
+ #define DRM_RCAR_DU_CMM_SET_LUT		(DRM_RCAR_DU_CMM_FUNC_BASE + 6)
++#define DRM_RCAR_DU_CMM_ALLOC		(DRM_RCAR_DU_CMM_FUNC_BASE + 7)
++#define DRM_RCAR_DU_CMM_FREE		(DRM_RCAR_DU_CMM_FUNC_BASE + 8)
+ 
+ #define DRM_IOCTL_DRM_RCAR_DU_SET_VMUTE \
+ 	DRM_IOW(DRM_COMMAND_BASE + DRM_RCAR_DU_SET_VMUTE, \
+@@ -136,4 +146,12 @@ struct rcar_du_cmm_config {
+ 	DRM_IOW(DRM_COMMAND_BASE + DRM_RCAR_DU_CMM_SET_LUT, \
+ 		struct rcar_du_cmm_table)
+ 
++#define DRM_IOCTL_RCAR_DU_CMM_ALLOC \
++	DRM_IOWR(DRM_COMMAND_BASE + DRM_RCAR_DU_CMM_ALLOC, \
++		struct rcar_du_cmm_buf)
++
++#define DRM_IOCTL_RCAR_DU_CMM_FREE \
++	DRM_IOW(DRM_COMMAND_BASE + DRM_RCAR_DU_CMM_FREE, \
++		struct rcar_du_cmm_buf)
++
+ #endif /* __RCAR_DU_DRM_H__ */
+-- 
+1.9.1
+
