@@ -39,6 +39,7 @@ struct rcar_du_cmm_config {
 	unsigned int	crtc_id;
 	int		csc;
 	int		lut_buf;
+	int		clu_buf;
 };
 
 /* DRM_RCAR_DU_CMM_ALLOC: DU-CMM alloc cma buffer */
@@ -86,10 +87,15 @@ struct rcar_du_cmm_buf {
 #define LUT_DOUBLE_BUFFER_B		2
 #define LUT_SINGLE_BUFFER		3
 
+#define CLU_DOUBLE_BUFFER_AUTO		0
+#define CLU_DOUBLE_BUFFER_A		1
+#define CLU_DOUBLE_BUFFER_B		2
+#define CLU_SINGLE_BUFFER		3
+
 
 /* rcar-du + vspd specific ioctls */
 /* DU-CMM ioctl */
-#define DRM_RCAR_DU_CMM_FUNC_BASE	(1)
+#define DRM_RCAR_DU_CMM_FUNC_BASE	(5)
 #define DRM_RCAR_DU_CMM_SET_CLU		(DRM_RCAR_DU_CMM_FUNC_BASE + 0)
 #define DRM_RCAR_DU_CMM_SET_HGO		(DRM_RCAR_DU_CMM_FUNC_BASE + 1)
 #define DRM_RCAR_DU_CMM_GET_HGO		(DRM_RCAR_DU_CMM_FUNC_BASE + 2)

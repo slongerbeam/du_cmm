@@ -1,20 +1,20 @@
-From eb01edaf38f2e60432e7adebd3a6ab5adb7a07fb Mon Sep 17 00:00:00 2001
+From dd270554525a7cd6bd1f9551ad71faa114601087 Mon Sep 17 00:00:00 2001
 From: Takashi Saito <takashi.saitou.ry@renesas.com>
 Date: Wed, 16 Dec 2015 15:44:08 +0900
-Subject: [PATCH 1/2] drm: rcar-du: Add DU CMM support
+Subject: [PATCH 1/1] drm: rcar-du: Add DU CMM support
 
 Signed-off-by: Takashi Saito <takashi.saitou.ry@renesas.com>
 ---
  drivers/gpu/drm/rcar-du/Makefile        |    2 +
- drivers/gpu/drm/rcar-du/rcar_du_cmm.c   | 1027 +++++++++++++++++++++++++++++++
- drivers/gpu/drm/rcar-du/rcar_du_crtc.c  |   31 +-
- drivers/gpu/drm/rcar-du/rcar_du_crtc.h  |   23 +
- drivers/gpu/drm/rcar-du/rcar_du_drv.c   |   25 +-
- drivers/gpu/drm/rcar-du/rcar_du_drv.h   |    3 +
+ drivers/gpu/drm/rcar-du/rcar_du_cmm.c   | 1372 +++++++++++++++++++++++++++++++
+ drivers/gpu/drm/rcar-du/rcar_du_crtc.c  |   29 +-
+ drivers/gpu/drm/rcar-du/rcar_du_crtc.h  |   32 +
+ drivers/gpu/drm/rcar-du/rcar_du_drv.c   |   36 +-
+ drivers/gpu/drm/rcar-du/rcar_du_drv.h   |    4 +
  drivers/gpu/drm/rcar-du/rcar_du_group.c |    5 +
- drivers/gpu/drm/rcar-du/rcar_du_regs.h  |   90 +++
- include/uapi/drm/rcar_du_drm.h          |  112 ++++
- 9 files changed, 1312 insertions(+), 6 deletions(-)
+ drivers/gpu/drm/rcar-du/rcar_du_regs.h  |   93 +++
+ include/uapi/drm/rcar_du_drm.h          |  135 +++
+ 9 files changed, 1702 insertions(+), 6 deletions(-)
  create mode 100644 drivers/gpu/drm/rcar-du/rcar_du_cmm.c
 
 diff --git a/drivers/gpu/drm/rcar-du/Makefile b/drivers/gpu/drm/rcar-du/Makefile
@@ -32,10 +32,10 @@ index 435c81b..7d83e8c 100644
  					   rcar_du_lvdscon.o
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_cmm.c b/drivers/gpu/drm/rcar-du/rcar_du_cmm.c
 new file mode 100644
-index 0000000..6400288
+index 0000000..53914be
 --- /dev/null
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_cmm.c
-@@ -0,0 +1,1027 @@
+@@ -0,0 +1,1372 @@
 +/*************************************************************************/ /*
 + DU CMM
 +
@@ -112,9 +112,7 @@ index 0000000..6400288
 +#include "rcar_du_plane.h"
 +#include "rcar_du_regs.h"
 +
-+
 +/* #define DEBUG_PROCE_TIME 1 */
-+/* TODO:#define USE_DMA 1 */
 +
 +/* CPF register */
 +#define CPG_BASE	0xE6150000
@@ -134,14 +132,6 @@ index 0000000..6400288
 +
 +#define EVENT_NUM	30
 +
-+
-+struct dma_mem {
-+	struct device *dev;
-+	dma_addr_t paddr;
-+	void *vaddr;
-+	unsigned long size;
-+};
-+
 +struct rcar_dma_trans {
 +	u32 trans_count;
 +	u32 src_addr;
@@ -151,27 +141,46 @@ index 0000000..6400288
 +
 +struct rcar_du_cmm_pendig_event {
 +	struct list_head link;
-+	unsigned long paddr;
 +	unsigned int event;
 +	unsigned long callback_data;
++	void *vaddr;
 +};
 +
 +struct cmm_lut_t {
 +	struct list_head list;
-+	struct dma_mem table;
 +	struct rcar_du_cmm_pendig_event *p;
 +	int buf_mode;
 +};
 +
 +struct cmm_clu_t {
 +	struct list_head list;
-+	struct dma_mem table; /* CLU & HGO temporary buffer */
++	struct rcar_du_cmm_pendig_event *p;
++	int buf_mode;
 +};
 +
 +struct cmm_hgo_t {
 +	struct list_head list;
-+	struct dma_mem table; /* CLU & HGO temporary buffer */
 +	int reset;
++};
++
++struct rcar_du_cmm_buf_list {
++	struct list_head list;
++	struct drm_gem_cma_object *cma_obj;
++	uint32_t handle;
++};
++
++struct cmm_reg_save {
++#ifdef CONFIG_PM_SLEEP
++	wait_queue_head_t wait;
++
++	u32 *lut_table;
++	u32 *clu_table;
++#endif /* CONFIG_PM_SLEEP */
++
++	u32 cm2_ctl0;	/* CM2_CTL0 */
++	u32 hgo_offset;	/* CMM_HGO_OFFSET */
++	u32 hgo_size;	/* CMM_HGO_SIZE */
++	u32 hgo_mode;	/* CMM_HGO_MODE */
 +};
 +
 +struct rcar_du_cmm {
@@ -180,10 +189,6 @@ index 0000000..6400288
 +	/* CMM base address */
 +	void __iomem *cmm_base;
 +	unsigned long cmm_paddr;
-+
-+	/* DMA base address */
-+	void __iomem *dma_base;
-+	int dma_ch;
 +
 +	struct cmm_lut_t lut;
 +	struct cmm_clu_t clu;
@@ -199,31 +204,19 @@ index 0000000..6400288
 +	struct workqueue_struct *workqueue;
 +	struct work_struct work;
 +
++	struct cmm_reg_save reg_save;
++
 +	bool active;
 +	bool dbuf;
-+	bool table_init;
++	bool clu_dbuf;
++	bool init;
 +};
 +
-+static int alloc_dma_memry(struct device *dev, struct dma_mem *dma_mem,
-+				unsigned long size)
-+{
-+	dma_mem->size = size;
-+	dma_mem->dev = dev;
-+	dma_mem->vaddr =
-+		dma_alloc_writecombine(dev, dma_mem->size,
-+			&dma_mem->paddr, GFP_KERNEL);
 +
-+	if (!dma_mem->vaddr)
-+		return -ENOMEM;
++static void *du_cmm_handle_to_vaddr(uint32_t handle);
 +
-+	return 0;
-+}
++static LIST_HEAD(cmm_buf_list);
 +
-+static inline void free_dma_memry(struct dma_mem *dma_mem)
-+{
-+	dma_free_writecombine(dma_mem->dev, dma_mem->size,
-+			dma_mem->vaddr, dma_mem->paddr);
-+}
 +
 +static inline u32 rcar_du_cmm_read(struct rcar_du_cmm *du_cmm, u32 reg)
 +{
@@ -235,6 +228,31 @@ index 0000000..6400288
 +{
 +	iowrite32(data, du_cmm->cmm_base + reg);
 +}
++
++/* create default CLU table data */
++static inline u32 index_to_clu_data(int index)
++{
++	int r, g, b;
++
++	r = index % 17;
++	index /= 17;
++	g = index % 17;
++	index /= 17;
++	b = index % 17;
++
++	r = (r << 20);
++	if (r > (255 << 16))
++		r = (255 << 16);
++	g = (g << 12);
++	if (g > (255 << 8))
++		g = (255 << 8);
++	b = (b << 4);
++	if (b > (255 << 0))
++		b = (255 << 0);
++
++	return r | g | b;
++}
++
 +
 +static struct rcar_du_crtc *id_to_rcrtc(struct drm_device *dev, int crtc_id)
 +{
@@ -288,9 +306,9 @@ index 0000000..6400288
 +	if (du_cmm == NULL)
 +		return -EINVAL;
 +
-+	cm2_ctl0 = rcar_du_cmm_read(du_cmm, CM2_CTL0);
++	cm2_ctl0 = du_cmm->reg_save.cm2_ctl0;
 +	cm2_ctl0 &= ~(CMM_CTL0_TM1_MASK | CMM_CTL0_TM0_MASK |
-+		      CMM_CTL0_YC | CMM_CTL0_DBUF);
++		      CMM_CTL0_YC | CMM_CTL0_DBUF | CMM_CTL0_CLUDB);
 +
 +	switch (config->csc) {
 +	case CSC_CONVERT_NONE:
@@ -316,6 +334,12 @@ index 0000000..6400288
 +		return -EINVAL;
 +	}
 +
++
++	if (du_cmm->dbuf && du_cmm->clu_dbuf &&
++	    (config->lut_buf == LUT_SINGLE_BUFFER) &&
++	    (config->clu_buf != CLU_SINGLE_BUFFER))
++		return -EINVAL;
++
 +	if (du_cmm->dbuf) {
 +		switch (config->lut_buf) {
 +		case LUT_DOUBLE_BUFFER_AUTO:
@@ -333,15 +357,31 @@ index 0000000..6400288
 +	} else {
 +		du_cmm->lut.buf_mode = LUT_SINGLE_BUFFER;
 +	}
++	if (du_cmm->clu_dbuf) {
++		switch (config->clu_buf) {
++		case CLU_DOUBLE_BUFFER_AUTO:
++		case CLU_DOUBLE_BUFFER_A:
++		case CLU_DOUBLE_BUFFER_B:
++			cm2_ctl0 |= CMM_CTL0_CLUDB;
++		case CLU_SINGLE_BUFFER:
++			break;
 +
++		default:
++			return -EINVAL;
++		}
++
++		du_cmm->clu.buf_mode = config->clu_buf;
++	} else {
++		du_cmm->clu.buf_mode = CLU_SINGLE_BUFFER;
++	}
 +
 +	if (du_cmm->lut.buf_mode == LUT_SINGLE_BUFFER) {
 +		if (rcar_du_cmm_read(du_cmm, CM2_CTL1) & CMM_CTL1_BFS)
 +			rcar_du_cmm_write(du_cmm, CM2_CTL1, 0);
 +	}
 +
-+
 +	rcar_du_cmm_write(du_cmm, CM2_CTL0, cm2_ctl0);
++	du_cmm->reg_save.cm2_ctl0 = cm2_ctl0;
 +
 +	return 0;
 +}
@@ -353,6 +393,7 @@ index 0000000..6400288
 +	struct rcar_du_cmm *du_cmm;
 +	int ret = 0;
 +	struct rcar_du_cmm_pendig_event *p;
++	void *vaddr;
 +
 +	du_cmm = id_to_cmm(dev, table->crtc_id);
 +	if (du_cmm == NULL)
@@ -368,11 +409,17 @@ index 0000000..6400288
 +		goto end;
 +	}
 +
++	vaddr = du_cmm_handle_to_vaddr(table->buff);
++	if (!vaddr) {
++		ret = -ENOMEM;
++		goto end;
++	}
++
 +	p = list_first_entry(&du_cmm->empty_list,
 +				struct rcar_du_cmm_pendig_event, link);
 +	list_del(&p->link);
 +
-+	p->paddr = table->buff;
++	p->vaddr = vaddr;
 +	p->event = CMM_EVENT_LUT_DONE;
 +	p->callback_data = table->user_data;
 +
@@ -401,6 +448,7 @@ index 0000000..6400288
 +	struct rcar_du_cmm *du_cmm;
 +	int ret = 0;
 +	struct rcar_du_cmm_pendig_event *p;
++	void *vaddr;
 +
 +	du_cmm = id_to_cmm(dev, table->crtc_id);
 +	if (du_cmm == NULL)
@@ -416,15 +464,28 @@ index 0000000..6400288
 +		goto end;
 +	}
 +
++	vaddr = du_cmm_handle_to_vaddr(table->buff);
++	if (!vaddr) {
++		ret = -ENOMEM;
++		goto end;
++	}
++
 +	p = list_first_entry(&du_cmm->empty_list,
 +				struct rcar_du_cmm_pendig_event, link);
 +	list_del(&p->link);
 +
-+	p->paddr = table->buff;
++	p->vaddr = vaddr;
 +	p->event = CMM_EVENT_CLU_DONE;
 +	p->callback_data = table->user_data;
 +
 +	list_add_tail(&p->link, &du_cmm->clu.list);
++
++	if (du_cmm->clu.p) {
++		list_add_tail(&du_cmm->clu.p->link, &du_cmm->event_list);
++		wake_up_interruptible(&du_cmm->event_wait);
++		du_cmm->clu.p = NULL;
++		drm_vblank_put(du_cmm->rcrtc->crtc.dev, du_cmm->rcrtc->index);
++	}
 +
 +	drm_vblank_get(dev, du_cmm->rcrtc->index);
 +
@@ -439,24 +500,15 @@ index 0000000..6400288
 +{
 +	struct rcar_du_cmm_hgo_config *hgo =
 +				(struct rcar_du_cmm_hgo_config *)data;
-+	struct rcar_du_crtc *rcrtc;
 +	struct rcar_du_cmm *du_cmm;
 +	const struct drm_display_mode *mode;
 +	u32 cm2_ctl0;
 +
-+	rcrtc = id_to_rcrtc(dev, hgo->crtc_id);
-+	if (!rcrtc)
-+		return -EINVAL;
-+
-+	du_cmm = rcrtc->cmm_handle;
-+
++	du_cmm = id_to_cmm(dev, hgo->crtc_id);
 +	if (du_cmm == NULL)
 +		return -EINVAL;
 +
-+	if (!du_cmm->active)
-+		return -EINVAL;
-+
-+	mode = &rcrtc->crtc.mode;
++	mode = &du_cmm->rcrtc->crtc.mode;
 +
 +	if ((mode->hdisplay < (hgo->x_offset + hgo->width)) ||
 +	    (mode->vdisplay < (hgo->y_offset + hgo->height)))
@@ -482,13 +534,20 @@ index 0000000..6400288
 +	rcar_du_cmm_write(du_cmm, CMM_HGO_LB3_H, 0);
 +	rcar_du_cmm_write(du_cmm, CMM_HGO_LB3_V, 0);
 +
-+	cm2_ctl0 = rcar_du_cmm_read(du_cmm, CM2_CTL0);
++	cm2_ctl0 = du_cmm->reg_save.cm2_ctl0;
 +	if (hgo->ctrl & HGO_CTRL_BEFORE_LUT)
 +		cm2_ctl0 |= CMM_CTL0_HISTS;
 +	else
 +		cm2_ctl0 &= ~CMM_CTL0_HISTS;
 +
 +	rcar_du_cmm_write(du_cmm, CM2_CTL0, cm2_ctl0);
++
++	du_cmm->reg_save.cm2_ctl0 = cm2_ctl0;
++	du_cmm->reg_save.hgo_offset =
++		(hgo->x_offset << 16) | (hgo->y_offset << 0);
++	du_cmm->reg_save.hgo_size =
++		(hgo->width << 16) | (hgo->height << 0);
++	du_cmm->reg_save.hgo_mode = hgo->mode;
 +
 +	if (du_cmm->hgo.reset == 0) {
 +		du_cmm->hgo.reset = 1;
@@ -508,6 +567,7 @@ index 0000000..6400288
 +	int ret = 0;
 +	int i;
 +	struct rcar_du_cmm_pendig_event *p[2] = {NULL, NULL};
++	void *vaddr;
 +
 +	du_cmm = id_to_cmm(dev, table->crtc_id);
 +	if (du_cmm == NULL)
@@ -517,6 +577,12 @@ index 0000000..6400288
 +		return -EINVAL;
 +
 +	mutex_lock(&du_cmm->lock);
++
++	vaddr = du_cmm_handle_to_vaddr(table->buff);
++	if (!vaddr) {
++		ret = -ENOMEM;
++		goto end;
++	}
 +
 +	for (i = 0; i < 2; i++) {
 +		if (list_empty(&du_cmm->empty_list)) {
@@ -532,13 +598,13 @@ index 0000000..6400288
 +	}
 +
 +	/* histogram read start event */
-+	p[0]->paddr = table->buff;
++	p[0]->vaddr = NULL;
 +	p[0]->event = CMM_EVENT_HGO_START;
 +	p[0]->callback_data = table->user_data;
 +	list_add_tail(&p[0]->link, &du_cmm->hgo.list);
 +
 +	/* histogram read end event */
-+	p[1]->paddr = table->buff;
++	p[1]->vaddr = vaddr;
 +	p[1]->event = CMM_EVENT_HGO_DONE;
 +	p[1]->callback_data = table->user_data;
 +	list_add_tail(&p[1]->link, &du_cmm->hgo.list);
@@ -605,13 +671,31 @@ index 0000000..6400288
 +	return 0;
 +}
 +
++static void du_cmm_clk(int index, bool on)
++{
++	const uint32_t cmm_clk_bit[] = {CMM0_CLOCK_BIT, CMM1_CLOCK_BIT,
++					CMM2_CLOCK_BIT, CMM3_CLOCK_BIT};
++	void __iomem *cpg_reg;
++	uint32_t srstclr7_data;
++
++	if (index >= 4)
++		return;
++
++	cpg_reg = ioremap_nocache(CPG_BASE, 0x1000);
++	srstclr7_data = ioread32(cpg_reg + CPG_MSTPSR7);
++	if (on)
++		srstclr7_data &= ~cmm_clk_bit[index];
++	else
++		srstclr7_data |= cmm_clk_bit[index];
++	iowrite32(srstclr7_data, cpg_reg + CPG_SMSTPCR7);
++	iounmap(cpg_reg);
++}
 +
 +int rcar_du_cmm_start_stop(struct rcar_du_crtc *rcrtc, bool on)
 +{
 +	struct rcar_du_cmm *du_cmm = rcrtc->cmm_handle;
-+	int i, j, k;
-+	unsigned long r, g, b;
-+	u32 cm2_ctl0;
++	int i;
++	u32 table_data;
 +
 +	if (du_cmm == NULL)
 +		return -EINVAL;
@@ -624,62 +708,72 @@ index 0000000..6400288
 +		rcar_du_cmm_write(du_cmm, CMM_LUT_CTRL, 0x00000000);
 +		rcar_du_cmm_write(du_cmm, CMM_CLU_CTRL, 0x00000000);
 +
++		du_cmm_clk(rcrtc->index, false);
++
 +		goto end;
 +	}
 +
-+	cm2_ctl0 = rcar_du_cmm_read(du_cmm, CM2_CTL0);
-+	switch (du_cmm->lut.buf_mode) {
-+	case LUT_SINGLE_BUFFER:
-+		cm2_ctl0 &= ~CMM_CTL0_DBUF;
-+		break;
-+	case LUT_DOUBLE_BUFFER_AUTO:
-+	case LUT_DOUBLE_BUFFER_A:
-+	case LUT_DOUBLE_BUFFER_B:
-+		cm2_ctl0 |= CMM_CTL0_DBUF;
-+		break;
-+	}
-+	rcar_du_cmm_write(du_cmm, CM2_CTL0, cm2_ctl0);
++	du_cmm_clk(rcrtc->index, true);
 +
++	if (du_cmm->init)
++		goto init_done;
++
++	du_cmm->init = true;
++
++	rcar_du_cmm_write(du_cmm, CM2_CTL0, du_cmm->reg_save.cm2_ctl0);
++	rcar_du_cmm_write(du_cmm, CMM_HGO_OFFSET, du_cmm->reg_save.hgo_offset);
++	rcar_du_cmm_write(du_cmm, CMM_HGO_SIZE, du_cmm->reg_save.hgo_size);
++	rcar_du_cmm_write(du_cmm, CMM_HGO_MODE, du_cmm->reg_save.hgo_mode);
++	rcar_du_cmm_write(du_cmm, CMM_HGO_LB_TH, 0);
++	rcar_du_cmm_write(du_cmm, CMM_HGO_LB0_H, 0);
++	rcar_du_cmm_write(du_cmm, CMM_HGO_LB0_V, 0);
++	rcar_du_cmm_write(du_cmm, CMM_HGO_LB1_H, 0);
++	rcar_du_cmm_write(du_cmm, CMM_HGO_LB1_V, 0);
++	rcar_du_cmm_write(du_cmm, CMM_HGO_LB2_H, 0);
++	rcar_du_cmm_write(du_cmm, CMM_HGO_LB2_V, 0);
++	rcar_du_cmm_write(du_cmm, CMM_HGO_LB3_H, 0);
++	rcar_du_cmm_write(du_cmm, CMM_HGO_LB3_V, 0);
++
++	/* init color table */
++	for (i = 0; i < CMM_LUT_NUM; i++) {
++	#ifdef CONFIG_PM_SLEEP
++		table_data = du_cmm->reg_save.lut_table[i];
++	#else
++		table_data = ((i << 16) | (i << 8) | (i << 0));
++	#endif /* CONFIG_PM_SLEEP */
++		rcar_du_cmm_write(du_cmm, CMM_LUT_TBLA_n(i), table_data);
++
++		if (du_cmm->dbuf)
++			rcar_du_cmm_write(du_cmm, CMM_LUT_TBLB_n(i),
++				table_data);
++	}
++
++	rcar_du_cmm_write(du_cmm, CMM_CLU_CTRL,
++		CMM_CLU_CTRL_AAI | CMM_CLU_CTRL_MVS);
++
++	rcar_du_cmm_write(du_cmm, CMM_CLU_ADDR, 0);
++	if (du_cmm->clu_dbuf)
++		rcar_du_cmm_write(du_cmm, CMM_CLU_ADDR2, 0);
++
++	for (i = 0; i < CMM_CLU_NUM; i++) {
++	#ifdef CONFIG_PM_SLEEP
++		table_data = du_cmm->reg_save.clu_table[i];
++	#else
++		table_data = index_to_clu_data(i);
++	#endif /* CONFIG_PM_SLEEP */
++		rcar_du_cmm_write(du_cmm, CMM_CLU_DATA, table_data);
++
++		if (du_cmm->dbuf)
++			rcar_du_cmm_write(du_cmm, CMM_CLU_DATA2,
++				table_data);
++	}
++
++init_done:
 +	/* enable color table */
 +	rcar_du_cmm_write(du_cmm, CMM_LUT_CTRL, CMM_LUT_CTRL_EN);
 +	rcar_du_cmm_write(du_cmm, CMM_CLU_CTRL,
 +		CMM_CLU_CTRL_AAI | CMM_CLU_CTRL_MVS | CMM_CLU_CTRL_EN);
 +
-+	if (du_cmm->table_init)
-+		goto table_init;
-+
-+	/* init color table */
-+	for (i = 0; i < CMM_LUT_NUM; i++) {
-+		rcar_du_cmm_write(du_cmm, CMM_LUT_TBLA_n(i),
-+				(i << 16) | (i << 8) | (i << 0));
-+
-+		if (du_cmm->dbuf)
-+			rcar_du_cmm_write(du_cmm, CMM_LUT_TBLB_n(i),
-+				(i << 16) | (i << 8) | (i << 0));
-+	}
-+
-+	rcar_du_cmm_write(du_cmm, CMM_CLU_ADDR, 0);
-+	for (i = 0; i <= 16; i++) {
-+		for (j = 0; j <= 16; j++) {
-+			for (k = 0; k <= 16; k++) {
-+				r = (k << 20);
-+				if (r > (255 << 16))
-+					r = (255 << 16);
-+				g = (j << 12);
-+				if (g > (255 << 8))
-+					g = (255 << 8);
-+				b = (i << 4);
-+				if (b > (255 << 0))
-+					b = (255 << 0);
-+
-+				rcar_du_cmm_write(du_cmm, CMM_CLU_DATA,
-+							r | g | b);
-+			}
-+		}
-+	}
-+
-+	du_cmm->table_init = true;
-+table_init:
 +	du_cmm->active = true;
 +end:
 +	mutex_unlock(&du_cmm->lock);
@@ -687,18 +781,65 @@ index 0000000..6400288
 +	return 0;
 +}
 +
++
++/* pop LUT que */
++static int lut_pop_locked(struct rcar_du_cmm *du_cmm,
++			  struct rcar_du_cmm_pendig_event **p,
++			  bool *done)
++{
++	struct rcar_du_cmm_pendig_event *_p = NULL;
++
++	*done = false;
++
++	if (list_empty(&du_cmm->lut.list)) {
++		/* prev lut table */
++		if (du_cmm->lut.p) {
++			_p = du_cmm->lut.p;
++			*done = true;
++			drm_vblank_put(du_cmm->rcrtc->crtc.dev,
++					du_cmm->rcrtc->index);
++		}
++	} else {
++		_p = list_first_entry(&du_cmm->lut.list,
++				     struct rcar_du_cmm_pendig_event, link);
++		list_del(&_p->link);
++		if (!list_empty(&du_cmm->lut.list) ||
++		    (du_cmm->lut.buf_mode != LUT_DOUBLE_BUFFER_AUTO)) {
++			*done = true;
++			drm_vblank_put(du_cmm->rcrtc->crtc.dev,
++					du_cmm->rcrtc->index);
++		}
++
++		/* prev lut table */
++		if (du_cmm->lut.p) {
++			list_add_tail(&du_cmm->lut.p->link,
++					&du_cmm->event_list);
++			wake_up_interruptible(&du_cmm->event_wait);
++			drm_vblank_put(du_cmm->rcrtc->crtc.dev,
++					du_cmm->rcrtc->index);
++		}
++	}
++
++	if (*done)
++		du_cmm->lut.p = NULL;
++	else
++		du_cmm->lut.p = _p;
++
++	*p = _p;
++
++	return 0;
++}
++
 +/* set 1D look up table */
 +static int lut_set(struct rcar_du_cmm *du_cmm,
-+		   struct rcar_du_cmm_pendig_event *p_lut,
-+		   bool update,
++		   struct rcar_du_cmm_pendig_event *p,
 +		   bool done)
 +{
-+	int ret = 0;
 +	int i;
 +	uint32_t lut_base;
 +	uint32_t *lut_buf;
 +
-+	if (p_lut == NULL)
++	if (p == NULL)
 +		return 0; /* skip */
 +
 +	/* set LUT */
@@ -721,60 +862,144 @@ index 0000000..6400288
 +		return -EINVAL;
 +	}
 +
-+	lut_buf = du_cmm->lut.table.vaddr;
-+	if (update) {
-+		ret = copy_from_user(lut_buf, (void __user *)p_lut->paddr,
-+				CMM_LUT_NUM * 4);
-+	} else {
-+		ret = 0;
-+	}
-+	if (!ret) {
-+		rcar_du_cmm_write(du_cmm, CMM_CLU_ADDR, 0);
-+		for (i = 0; i < CMM_LUT_NUM; i++)
-+			rcar_du_cmm_write(du_cmm, lut_base + i * 4,
-+						lut_buf[i]);
-+	} else {
-+		pr_err("%s : copy from user faile %d\n", __func__, ret);
-+		if (ret > 0)
-+			ret = -EFAULT;
-+	}
++	lut_buf = p->vaddr;
++	for (i = 0; i < CMM_LUT_NUM; i++)
++		rcar_du_cmm_write(du_cmm, lut_base + i * 4, lut_buf[i]);
 +
 +	if (done) {
-+		list_add_tail(&p_lut->link, &du_cmm->event_list);
++		list_add_tail(&p->link, &du_cmm->event_list);
 +		wake_up_interruptible(&du_cmm->event_wait);
 +	}
 +
-+	return ret;
++	return 0;
++}
++
++/* pop CLU que */
++static int clu_pop_locked(struct rcar_du_cmm *du_cmm,
++			  struct rcar_du_cmm_pendig_event **p,
++			  bool *done)
++{
++	struct rcar_du_cmm_pendig_event *_p = NULL;
++
++	*done = false;
++
++	if (list_empty(&du_cmm->clu.list)) {
++		/* prev clu table */
++		if (du_cmm->clu.p) {
++			_p = du_cmm->clu.p;
++			*done = true;
++			drm_vblank_put(du_cmm->rcrtc->crtc.dev,
++					du_cmm->rcrtc->index);
++		}
++	} else {
++		_p = list_first_entry(&du_cmm->clu.list,
++				     struct rcar_du_cmm_pendig_event, link);
++		list_del(&_p->link);
++		if (!list_empty(&du_cmm->clu.list) ||
++		    (du_cmm->clu.buf_mode != CLU_DOUBLE_BUFFER_AUTO)) {
++			*done = true;
++			drm_vblank_put(du_cmm->rcrtc->crtc.dev,
++					du_cmm->rcrtc->index);
++		}
++
++		/* prev clu table */
++		if (du_cmm->clu.p) {
++			list_add_tail(&du_cmm->clu.p->link,
++					&du_cmm->event_list);
++			wake_up_interruptible(&du_cmm->event_wait);
++			drm_vblank_put(du_cmm->rcrtc->crtc.dev,
++					du_cmm->rcrtc->index);
++		}
++	}
++
++	if (*done)
++		du_cmm->clu.p = NULL;
++	else
++		du_cmm->clu.p = _p;
++
++	*p = _p;
++
++	return 0;
 +}
 +
 +/* set 3D look up table */
 +static int clu_set(struct rcar_du_cmm *du_cmm,
-+		   struct rcar_du_cmm_pendig_event *p_clu)
++		   struct rcar_du_cmm_pendig_event *p,
++		   bool done)
 +{
-+	int ret = 0;
 +	int i;
++	uint32_t addr_reg, data_reg;
 +	uint32_t *clu_buf;
 +
-+	if (p_clu == NULL)
++	if (p == NULL)
 +		return 0; /* skip */
 +
-+	clu_buf = du_cmm->clu.table.vaddr;
-+	ret = copy_from_user(clu_buf, (void __user *)p_clu->paddr,
-+				CMM_CLU_NUM * 4);
-+	if (!ret) {
-+		rcar_du_cmm_write(du_cmm, CMM_CLU_ADDR, 0);
-+		for (i = 0; i < CMM_CLU_NUM; i++)
-+			rcar_du_cmm_write(du_cmm, CMM_CLU_DATA, clu_buf[i]);
-+	} else {
-+		pr_err("%s : copy from user faile %d\n", __func__, ret);
-+		if (ret > 0)
-+			ret = -EFAULT;
++	/* set LUT */
++	switch (du_cmm->clu.buf_mode) {
++	case CLU_DOUBLE_BUFFER_A:
++	case CLU_SINGLE_BUFFER:
++		addr_reg = CMM_CLU_ADDR;
++		data_reg = CMM_CLU_DATA;
++		break;
++
++	case CLU_DOUBLE_BUFFER_AUTO:
++		if (rcar_du_cmm_read(du_cmm, CM2_CTL1) & CMM_CTL1_BFS) {
++			addr_reg = CMM_CLU_ADDR;
++			data_reg = CMM_CLU_DATA;
++			break;
++		}
++	case CLU_DOUBLE_BUFFER_B:
++		addr_reg = CMM_CLU_ADDR2;
++		data_reg = CMM_CLU_DATA2;
++		break;
++
++	default:
++		return -EINVAL;
 +	}
 +
-+	list_add_tail(&p_clu->link, &du_cmm->event_list);
-+	wake_up_interruptible(&du_cmm->event_wait);
++	clu_buf = p->vaddr;
++	rcar_du_cmm_write(du_cmm, addr_reg, 0);
++	for (i = 0; i < CMM_CLU_NUM; i++)
++		rcar_du_cmm_write(du_cmm, data_reg, clu_buf[i]);
 +
-+	return ret;
++	if (done) {
++		list_add_tail(&p->link, &du_cmm->event_list);
++		wake_up_interruptible(&du_cmm->event_wait);
++	}
++
++	return 0;
++}
++
++/* pop HGO que */
++static int hgo_pop_locked(struct rcar_du_cmm *du_cmm,
++			  struct rcar_du_cmm_pendig_event **p,
++			  bool *reset)
++{
++	struct rcar_du_cmm_pendig_event *_p[2] = {NULL, };
++
++	int i;
++
++	*reset = false;
++
++	if (!list_empty(&du_cmm->hgo.list)) {
++		for (i = 0; i < 2; i++) {
++			_p[i] = list_first_entry(&du_cmm->hgo.list,
++					struct rcar_du_cmm_pendig_event, link);
++			list_del(&_p[i]->link);
++		}
++		drm_vblank_put(du_cmm->rcrtc->crtc.dev, du_cmm->rcrtc->index);
++	}
++
++	if (du_cmm->hgo.reset) {
++		drm_vblank_put(du_cmm->rcrtc->crtc.dev, du_cmm->rcrtc->index);
++		du_cmm->hgo.reset = 0;
++		*reset = true;
++	}
++
++	p[0] = _p[0];
++	p[1] = _p[1];
++
++	return 0;
 +}
 +
 +
@@ -783,9 +1008,7 @@ index 0000000..6400288
 +		   struct rcar_du_cmm_pendig_event *p_hgo[],
 +		   bool need_reset)
 +{
-+	int ret = 0;
 +	int i, j;
-+	uint32_t *hgo_buf;
 +	const u32 histo_offset[3] = {
 +		CMM_HGO_R_HISTO_n(0),
 +		CMM_HGO_G_HISTO_n(0),
@@ -803,20 +1026,11 @@ index 0000000..6400288
 +	wake_up_interruptible(&du_cmm->event_wait);
 +
 +	for (i = 0; i < 3; i++) {
-+		unsigned long dist_addr = p_hgo[1]->paddr + CMM_HGO_NUM * 4 * i;
-+
-+		hgo_buf = du_cmm->hgo.table.vaddr;
++		uint32_t *hgo_buf = p_hgo[1]->vaddr + CMM_HGO_NUM * 4 * i;
 +
 +		for (j = 0; j < CMM_HGO_NUM; j++)
 +			hgo_buf[j] = rcar_du_cmm_read(du_cmm,
 +						histo_offset[i] + j * 4);
-+
-+		if (copy_to_user((void __user *)dist_addr,
-+					hgo_buf, CMM_HGO_NUM * 4)) {
-+			ret = -EFAULT;
-+			pr_err("%s : copy to user faile\n", __func__);
-+			break;
-+		}
 +	}
 +
 +	list_add_tail(&p_hgo[1]->link, &du_cmm->event_list);
@@ -825,7 +1039,7 @@ index 0000000..6400288
 +hgo_reset:
 +	rcar_du_cmm_write(du_cmm, CMM_HGO_REGRST, CMM_HGO_REGRST_RCLEA);
 +
-+	return ret;
++	return 0;
 +}
 +
 +
@@ -834,13 +1048,10 @@ index 0000000..6400288
 +{
 +	struct rcar_du_cmm *du_cmm =
 +			container_of(work, struct rcar_du_cmm, work);
-+	struct rcar_du_cmm_pendig_event *p_lut = NULL;
-+	struct rcar_du_cmm_pendig_event *p_clu = NULL;
-+	struct rcar_du_cmm_pendig_event *p_hgo[2] = {NULL, };
-+	bool hgo_reset = false;
-+	bool lut_update = false;
-+	bool lut_done = false;
-+	int i;
++	struct rcar_du_cmm_pendig_event *p_lut;
++	struct rcar_du_cmm_pendig_event *p_clu;
++	struct rcar_du_cmm_pendig_event *p_hgo[2];
++	bool lut_done, clu_done, hgo_reset;
 +#ifdef DEBUG_PROCE_TIME
 +	struct timeval start_time, end_time;
 +	unsigned long lut_time, clu_time, hgo_time;
@@ -848,53 +1059,9 @@ index 0000000..6400288
 +
 +	mutex_lock(&du_cmm->lock);
 +
-+	if (!list_empty(&du_cmm->lut.list)) {
-+		lut_update = true;
-+		p_lut = list_first_entry(&du_cmm->lut.list,
-+				     struct rcar_du_cmm_pendig_event, link);
-+		list_del(&p_lut->link);
-+		if (!list_empty(&du_cmm->lut.list)) {
-+			lut_done = true;
-+			drm_vblank_put(du_cmm->rcrtc->crtc.dev,
-+					du_cmm->rcrtc->index);
-+		}
-+	}
-+	if (du_cmm->lut.p) {
-+		if (p_lut) {
-+			list_add_tail(&du_cmm->lut.p->link,
-+					&du_cmm->event_list);
-+			wake_up_interruptible(&du_cmm->event_wait);
-+		} else {
-+			p_lut = du_cmm->lut.p;
-+			lut_done = true;
-+		}
-+		drm_vblank_put(du_cmm->rcrtc->crtc.dev, du_cmm->rcrtc->index);
-+	}
-+	if (lut_done)
-+		du_cmm->lut.p = NULL;
-+	else
-+		du_cmm->lut.p = p_lut;
-+
-+	if (!list_empty(&du_cmm->clu.list)) {
-+		p_clu = list_first_entry(&du_cmm->clu.list,
-+				     struct rcar_du_cmm_pendig_event, link);
-+		list_del(&p_clu->link);
-+		drm_vblank_put(du_cmm->rcrtc->crtc.dev, du_cmm->rcrtc->index);
-+	}
-+
-+	if (!list_empty(&du_cmm->hgo.list)) {
-+		for (i = 0; i < 2; i++) {
-+			p_hgo[i] = list_first_entry(&du_cmm->hgo.list,
-+					struct rcar_du_cmm_pendig_event, link);
-+			list_del(&p_hgo[i]->link);
-+		}
-+		drm_vblank_put(du_cmm->rcrtc->crtc.dev, du_cmm->rcrtc->index);
-+	}
-+	if (du_cmm->hgo.reset) {
-+		drm_vblank_put(du_cmm->rcrtc->crtc.dev, du_cmm->rcrtc->index);
-+		du_cmm->hgo.reset = 0;
-+		hgo_reset = true;
-+	}
++	lut_pop_locked(du_cmm, &p_lut, &lut_done);
++	clu_pop_locked(du_cmm, &p_clu, &clu_done);
++	hgo_pop_locked(du_cmm, p_hgo, &hgo_reset);
 +
 +	mutex_unlock(&du_cmm->lock);
 +
@@ -902,7 +1069,7 @@ index 0000000..6400288
 +#ifdef DEBUG_PROCE_TIME
 +	do_gettimeofday(&start_time);
 +#endif
-+	lut_set(du_cmm, p_lut, lut_update, lut_done);
++	lut_set(du_cmm, p_lut, lut_done);
 +#ifdef DEBUG_PROCE_TIME
 +	do_gettimeofday(&end_time);
 +	lut_time = (long)diff_timevals(&start_time, &end_time);
@@ -912,7 +1079,7 @@ index 0000000..6400288
 +#ifdef DEBUG_PROCE_TIME
 +	do_gettimeofday(&start_time);
 +#endif
-+	clu_set(du_cmm, p_clu);
++	clu_set(du_cmm, p_clu, clu_done);
 +#ifdef DEBUG_PROCE_TIME
 +	do_gettimeofday(&end_time);
 +	clu_time = (long)diff_timevals(&start_time, &end_time);
@@ -928,6 +1095,10 @@ index 0000000..6400288
 +	hgo_time = (long)diff_timevals(&start_time, &end_time);
 +#endif
 +
++#ifdef CONFIG_PM_SLEEP
++	wake_up_interruptible(&du_cmm->reg_save.wait);
++#endif /* CONFIG_PM_SLEEP */
++
 +#ifdef DEBUG_PROCE_TIME
 +	{
 +		struct rcar_du_device *rcdu = du_cmm->rcrtc->group->dev;
@@ -942,6 +1113,16 @@ index 0000000..6400288
 +#endif
 +}
 +
++static int du_cmm_que_empty(struct rcar_du_cmm *du_cmm)
++{
++	if (list_empty(&du_cmm->lut.list) && !du_cmm->lut.p &&
++	    list_empty(&du_cmm->clu.list) && !du_cmm->clu.p &&
++	    list_empty(&du_cmm->hgo.list) && !du_cmm->hgo.reset)
++		return 1;
++
++	return 0;
++}
++
 +void rcar_du_cmm_kick(struct rcar_du_crtc *rcrtc)
 +{
 +	struct rcar_du_cmm *du_cmm = rcrtc->cmm_handle;
@@ -949,15 +1130,176 @@ index 0000000..6400288
 +	if (du_cmm == NULL)
 +		return;
 +
-+	if (!list_empty(&du_cmm->lut.list) || du_cmm->lut.p ||
-+	    !list_empty(&du_cmm->clu.list) ||
-+	    !list_empty(&du_cmm->hgo.list) || du_cmm->hgo.reset) {
++	if (!du_cmm_que_empty(du_cmm))
 +		queue_work(du_cmm->workqueue, &du_cmm->work);
++}
++
++static void *du_cmm_handle_to_vaddr(uint32_t handle)
++{
++	struct rcar_du_cmm_buf_list *buf_list;
++	void *ptr = NULL;
++
++	list_for_each_entry(buf_list, &cmm_buf_list, list) {
++		if (buf_list->handle == handle) {
++			ptr = buf_list->cma_obj->vaddr;
++			break;
++		}
 +	}
++
++	return ptr;
++}
++
++DEFINE_MUTEX(du_cmm_buf_lock);
++
++int rcar_du_cmm_alloc(struct drm_device *dev, void *data,
++			struct drm_file *file_priv)
++{
++	struct rcar_du_cmm_buf *buf = (struct rcar_du_cmm_buf *)data;
++	struct drm_gem_cma_object *cma_obj;
++	struct drm_gem_object *gem_obj;
++	uint32_t handle;
++	u64 offset;
++	int ret = 0;
++	struct rcar_du_cmm_buf_list *buf_list;
++
++	buf->handle = 0;
++
++	buf_list = kzalloc(sizeof(*buf_list), GFP_KERNEL);
++	if (buf_list == NULL)
++		return -ENOMEM;
++
++	mutex_lock(&du_cmm_buf_lock);
++
++	/* create buffer */
++	cma_obj = drm_gem_cma_create(dev, buf->size);
++	if (IS_ERR(cma_obj)) {
++		kfree(buf_list);
++		ret = -ENOMEM;
++		goto end;
++	}
++
++	gem_obj = &cma_obj->base;
++
++	ret = drm_gem_handle_create(file_priv, gem_obj, &handle);
++	if (ret) {
++		kfree(buf_list);
++		drm_gem_cma_free_object(gem_obj);
++		ret = -ENOMEM;
++		goto end;
++	}
++
++	drm_gem_object_unreference_unlocked(gem_obj);
++
++	drm_gem_cma_dumb_map_offset(file_priv, dev, handle, &offset);
++
++	/* set return value */
++	buf->handle = handle;
++	buf->mmap_offset = offset;
++	buf->phy_addr = cma_obj->paddr;
++
++	/* add list */
++	buf_list->cma_obj = cma_obj;
++	buf_list->handle = handle;
++	list_add_tail(&buf_list->list, &cmm_buf_list);
++
++end:
++	mutex_unlock(&du_cmm_buf_lock);
++
++	return ret;
++}
++
++#ifdef CONFIG_PM_SLEEP
++int rcar_du_cmm_pm_suspend(struct rcar_du_crtc *rcrtc)
++{
++	struct rcar_du_cmm *du_cmm = rcrtc->cmm_handle;
++	struct rcar_du_device *rcdu = rcrtc->group->dev;
++	int i, j, k, index;
++	int ret;
++
++	ret = wait_event_timeout(du_cmm->reg_save.wait,
++				 du_cmm_que_empty(du_cmm),
++				 msecs_to_jiffies(500));
++	if (ret == 0)
++		dev_err(rcdu->dev, "rcar-du cmm suspend : timeout\n");
++
++	if (!du_cmm->init)
++		return 0;
++
++	du_cmm->init = false;
++
++	if (!du_cmm->active)
++		du_cmm_clk(rcrtc->index, true);
++
++	/* table save */
++	for (i = 0; i < CMM_LUT_NUM; i++) {
++		du_cmm->reg_save.lut_table[i] =
++			rcar_du_cmm_read(du_cmm, CMM_LUT_TBLA_n(i));
++	}
++
++	index = 0;
++	for (i = 0; i < 17; i++) {
++		for (j = 0; j < 17; j++) {
++			for (k = 0; k < 17; k++) {
++				rcar_du_cmm_write(du_cmm, CMM_CLU_ADDR,
++					(i << 16) | (j << 8) | (k << 0));
++				du_cmm->reg_save.clu_table[index++] =
++					rcar_du_cmm_read(du_cmm, CMM_CLU_DATA);
++			}
++		}
++	}
++
++	if (!du_cmm->active)
++		du_cmm_clk(rcrtc->index, false);
++
++	return 0;
++}
++
++int rcar_du_cmm_pm_resume(struct rcar_du_crtc *rcrtc)
++{
++	/* none */
++	return 0;
++}
++
++#endif /* CONFIG_PM_SLEEP */
++
++
++
++int rcar_du_cmm_free(struct drm_device *dev, void *data,
++			struct drm_file *file_priv)
++{
++	int ret;
++	struct rcar_du_cmm_buf *buf = (struct rcar_du_cmm_buf *)data;
++	struct rcar_du_cmm_buf_list *buf_list;
++	int find = 0;
++
++	mutex_lock(&du_cmm_buf_lock);
++
++	list_for_each_entry(buf_list, &cmm_buf_list, list) {
++		if (buf_list->handle == buf->handle) {
++			find = 1;
++			break;
++		}
++	}
++
++	if (!find) {
++		ret = 0;
++		goto end;
++	}
++
++	list_del(&buf_list->list);
++	kfree(buf_list);
++
++	ret = drm_gem_handle_delete(file_priv, buf->handle);
++
++end:
++	mutex_unlock(&du_cmm_buf_lock);
++
++	return ret;
 +}
 +
 +
-+int rcar_du_cmm_init(struct rcar_du_crtc *rcrtc, bool dbuf)
++
++int rcar_du_cmm_init(struct rcar_du_crtc *rcrtc)
 +{
 +	struct rcar_du_cmm *du_cmm;
 +	int ret;
@@ -965,14 +1307,12 @@ index 0000000..6400288
 +	const uint32_t cmm_addr[] = {CMM0_ADDR, CMM1_ADDR,
 +				     CMM2_ADDR, CMM3_ADDR};
 +	struct rcar_du_device *rcdu = rcrtc->group->dev;
-+	const uint32_t cmm_clk_bit[] = {CMM0_CLOCK_BIT, CMM1_CLOCK_BIT,
-+					CMM2_CLOCK_BIT, CMM3_CLOCK_BIT};
 +	char name[64];
 +
-+	void __iomem *cpg_reg;
-+	uint32_t srstclr7_data;
++	if (!rcar_du_has(rcdu, RCAR_DU_FEATURE_CMM))
++		return 0;
 +
-+	du_cmm = kzalloc(sizeof(*du_cmm), GFP_KERNEL);
++	du_cmm = devm_kzalloc(rcdu->dev, sizeof(*du_cmm), GFP_KERNEL);
 +	if (du_cmm == NULL) {
 +		ret = -ENOMEM;
 +		goto error_alloc;
@@ -987,43 +1327,60 @@ index 0000000..6400288
 +		goto error_mapping_cmm;
 +	}
 +
-+	ret = alloc_dma_memry(rcrtc->group->dev->dev,
-+				&du_cmm->lut.table, CMM_LUT_NUM * 4);
-+	if (ret) {
-+		dev_err(rcdu->dev, "rcar-du cmm init : error alloc LUT table\n");
-+		goto error_alloc_lut_table;
-+	}
-+
-+	ret = alloc_dma_memry(rcrtc->group->dev->dev,
-+				&du_cmm->clu.table, CMM_CLU_NUM * 4);
-+	if (ret) {
-+		dev_err(rcdu->dev, "rcar-du cmm init : error alloc CLU table\n");
-+		goto error_alloc_clu_table;
-+	}
-+	ret = alloc_dma_memry(rcrtc->group->dev->dev,
-+				&du_cmm->hgo.table, CMM_HGO_NUM * 4);
-+	if (ret) {
-+		dev_err(rcdu->dev, "rcar-du cmm init : error alloc HGO table\n");
-+		goto error_alloc_hgo_table;
-+	}
-+
 +	du_cmm->rcrtc = rcrtc;
 +
 +	du_cmm->hgo.reset = 0;
++	du_cmm->reg_save.cm2_ctl0 = 0;
++	du_cmm->reg_save.hgo_offset = 0;
++	du_cmm->reg_save.hgo_size = 0;
++	du_cmm->reg_save.hgo_mode = 0;
 +
-+	du_cmm->dbuf = dbuf;
-+	if (dbuf)
++	du_cmm->dbuf = rcar_du_has(rcdu, RCAR_DU_FEATURE_CMM_LUT_DBUF);
++	if (du_cmm->dbuf) {
 +		du_cmm->lut.buf_mode = LUT_DOUBLE_BUFFER_AUTO;
-+	else
++		du_cmm->reg_save.cm2_ctl0 |= CMM_CTL0_DBUF;
++	} else {
 +		du_cmm->lut.buf_mode = LUT_SINGLE_BUFFER;
++	}
++
++	du_cmm->clu_dbuf = rcar_du_has(rcdu, RCAR_DU_FEATURE_CMM_CLU_DBUF);
++	if (du_cmm->clu_dbuf) {
++		du_cmm->clu.buf_mode = CLU_DOUBLE_BUFFER_AUTO;
++		du_cmm->reg_save.cm2_ctl0 |= CMM_CTL0_CLUDB;
++	} else {
++		du_cmm->clu.buf_mode = CLU_SINGLE_BUFFER;
++	}
++
++#ifdef CONFIG_PM_SLEEP
++	du_cmm->reg_save.lut_table =
++		devm_kzalloc(rcdu->dev, CMM_LUT_NUM * 4, GFP_KERNEL);
++	if (du_cmm->reg_save.lut_table == NULL) {
++		ret = -ENOMEM;
++		goto error_lut_reg_save_buf;
++	}
++	for (i = 0; i < CMM_LUT_NUM; i++)
++		du_cmm->reg_save.lut_table[i] = (i << 16) | (i << 8) | (i << 0);
++
++	du_cmm->reg_save.clu_table =
++		devm_kzalloc(rcdu->dev, CMM_CLU_NUM * 4, GFP_KERNEL);
++	if (du_cmm->reg_save.clu_table == NULL) {
++		ret = -ENOMEM;
++		goto error_clu_reg_save_buf;
++	}
++	for (i = 0; i < CMM_CLU_NUM; i++)
++		du_cmm->reg_save.clu_table[i] = index_to_clu_data(i);
++
++	init_waitqueue_head(&du_cmm->reg_save.wait);
++#endif /* CONFIG_PM_SLEEP */
 +
 +	du_cmm->active = false;
-+	du_cmm->table_init = false;
++	du_cmm->init = false;
 +
 +	INIT_LIST_HEAD(&du_cmm->event_list);
 +	INIT_LIST_HEAD(&du_cmm->empty_list);
 +	INIT_LIST_HEAD(&du_cmm->lut.list);
 +	du_cmm->lut.p = NULL;
++	du_cmm->clu.p = NULL;
 +	INIT_LIST_HEAD(&du_cmm->clu.list);
 +	INIT_LIST_HEAD(&du_cmm->hgo.list);
 +
@@ -1036,38 +1393,26 @@ index 0000000..6400288
 +	du_cmm->workqueue = create_singlethread_workqueue(name);
 +	INIT_WORK(&du_cmm->work, du_cmm_work);
 +
-+
 +	rcrtc->cmm_handle = du_cmm;
-+
-+	cpg_reg = ioremap_nocache(CPG_BASE, 0x1000);
-+	srstclr7_data = ioread32(cpg_reg + CPG_MSTPSR7);
-+	srstclr7_data &= ~cmm_clk_bit[rcrtc->index];
-+	iowrite32(srstclr7_data, cpg_reg + CPG_SMSTPCR7);
-+	iounmap(cpg_reg);
 +
 +	dev_info(rcdu->dev, "DU%d use CMM(%s buffer)\n",
 +		rcrtc->index, du_cmm->dbuf ? "Double" : "Single");
 +
 +	return 0;
 +
-+error_alloc_hgo_table:
-+	free_dma_memry(&du_cmm->clu.table);
-+error_alloc_clu_table:
-+	free_dma_memry(&du_cmm->lut.table);
-+error_alloc_lut_table:
-+	iounmap(du_cmm->cmm_base);
++#ifdef CONFIG_PM_SLEEP
++error_clu_reg_save_buf:
++error_lut_reg_save_buf:
++#endif /* CONFIG_PM_SLEEP */
 +error_mapping_cmm:
-+	kfree(du_cmm);
 +error_alloc:
 +	return ret;
 +}
-+
-+
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_crtc.c b/drivers/gpu/drm/rcar-du/rcar_du_crtc.c
-index 8b22f74..d4089d5 100644
+index 7ece810..9b9a5a0 100644
 --- a/drivers/gpu/drm/rcar-du/rcar_du_crtc.c
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_crtc.c
-@@ -253,9 +253,20 @@ static void rcar_du_crtc_set_display_timing(struct rcar_du_crtc *rcrtc)
+@@ -269,9 +269,20 @@ static void rcar_du_crtc_set_display_timing(struct rcar_du_crtc *rcrtc)
  	rcar_du_crtc_write(rcrtc, DSMR, value);
  
  	/* Display timings */
@@ -1091,7 +1436,7 @@ index 8b22f74..d4089d5 100644
  	rcar_du_crtc_write(rcrtc, HSWR, mode->hsync_end -
  					mode->hsync_start - 1);
  	rcar_du_crtc_write(rcrtc, HCR,  mode->htotal - 1);
-@@ -487,6 +498,9 @@ static void rcar_du_crtc_start(struct rcar_du_crtc *rcrtc)
+@@ -503,6 +514,9 @@ static void rcar_du_crtc_start(struct rcar_du_crtc *rcrtc)
  	/* Turn vertical blanking interrupt reporting back on. */
  	drm_crtc_vblank_on(crtc);
  
@@ -1101,7 +1446,7 @@ index 8b22f74..d4089d5 100644
  	rcrtc->started = true;
  }
  
-@@ -497,6 +511,9 @@ static void rcar_du_crtc_stop(struct rcar_du_crtc *rcrtc)
+@@ -513,6 +527,9 @@ static void rcar_du_crtc_stop(struct rcar_du_crtc *rcrtc)
  	if (!rcrtc->started)
  		return;
  
@@ -1111,7 +1456,7 @@ index 8b22f74..d4089d5 100644
  	/* Disable all planes and wait for the change to take effect. This is
  	 * required as the DSnPR registers are updated on vblank, and no vblank
  	 * will occur once the CRTC is stopped. Disabling planes when starting
-@@ -661,6 +678,10 @@ static irqreturn_t rcar_du_crtc_irq(int irq, void *arg)
+@@ -688,6 +705,10 @@ static irqreturn_t rcar_du_crtc_irq(int irq, void *arg)
  	if (status & DSSR_FRM) {
  		drm_handle_vblank(rcrtc->crtc.dev, rcrtc->index);
  		rcar_du_crtc_finish_page_flip(rcrtc);
@@ -1122,19 +1467,17 @@ index 8b22f74..d4089d5 100644
  		ret = IRQ_HANDLED;
  	}
  
-@@ -762,6 +783,10 @@ int rcar_du_crtc_create(struct rcar_du_group *rgrp, unsigned int index)
+@@ -789,6 +810,8 @@ int rcar_du_crtc_create(struct rcar_du_group *rgrp, unsigned int index)
  		return ret;
  	}
  
-+	if (rcar_du_has(rcdu, RCAR_DU_FEATURE_CMM))
-+		rcar_du_cmm_init(rcrtc, rcar_du_has(rcdu,
-+					RCAR_DU_FEATURE_CMM_FBUF));
++	rcar_du_cmm_init(rcrtc);
 +
  	return 0;
  }
  
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_crtc.h b/drivers/gpu/drm/rcar-du/rcar_du_crtc.h
-index 6c0bd3c..8e664b9 100644
+index 3476515..d87fe21 100644
 --- a/drivers/gpu/drm/rcar-du/rcar_du_crtc.h
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_crtc.h
 @@ -54,6 +54,8 @@ struct rcar_du_crtc {
@@ -1146,9 +1489,9 @@ index 6c0bd3c..8e664b9 100644
  };
  
  struct dpll_info {
-@@ -86,4 +88,25 @@ void rcar_du_crtc_resume(struct rcar_du_crtc *rcrtc);
- void rcar_du_crtc_route_output(struct drm_crtc *crtc,
- 			       enum rcar_du_output output);
+@@ -89,4 +91,34 @@ int rcar_du_crtc_get(struct rcar_du_crtc *rcrtc);
+ void rcar_du_crtc_put(struct rcar_du_crtc *rcrtc);
+ void rcar_du_crtc_vbk_check(struct rcar_du_group *rgrp);
  
 +
 +/* DU-CMM functions */
@@ -1161,7 +1504,7 @@ index 6c0bd3c..8e664b9 100644
 +			struct drm_file *file_priv);
 +int rcar_du_cmm_hgo_get(struct drm_device *dev, void *data,
 +			struct drm_file *file_priv);
-+int rcar_du_cmm_init(struct rcar_du_crtc *rcrtc, bool dbuf);
++int rcar_du_cmm_init(struct rcar_du_crtc *rcrtc);
 +int rcar_du_cmm_hgo_set(struct drm_device *dev, void *data,
 +			struct drm_file *file_priv);
 +int rcar_du_cmm_hgo_start(struct drm_device *dev, void *data,
@@ -1171,12 +1514,21 @@ index 6c0bd3c..8e664b9 100644
 +int rcar_du_cmm_config(struct drm_device *dev, void *data,
 +			struct drm_file *file_priv);
 +
++int rcar_du_cmm_alloc(struct drm_device *dev, void *data,
++			struct drm_file *file_priv);
++int rcar_du_cmm_free(struct drm_device *dev, void *data,
++			struct drm_file *file_priv);
++#ifdef CONFIG_PM_SLEEP
++int rcar_du_cmm_pm_suspend(struct rcar_du_crtc *rcrtc);
++int rcar_du_cmm_pm_resume(struct rcar_du_crtc *rcrtc);
++#endif /* CONFIG_PM_SLEEP */
++
  #endif /* __RCAR_DU_CRTC_H__ */
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_drv.c b/drivers/gpu/drm/rcar-du/rcar_du_drv.c
-index dff01e6..49a9501 100644
+index 6290193..70fd476 100644
 --- a/drivers/gpu/drm/rcar-du/rcar_du_drv.c
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_drv.c
-@@ -100,7 +100,8 @@ static const struct rcar_du_device_info rcar_du_r8a7790_info = {
+@@ -101,7 +101,8 @@ static const struct rcar_du_device_info rcar_du_r8a7790_info = {
  static const struct rcar_du_device_info rcar_du_r8a7791_info = {
  	.gen = 2,
  	.features = RCAR_DU_FEATURE_CRTC_IRQ_CLOCK
@@ -1186,29 +1538,30 @@ index dff01e6..49a9501 100644
  	.num_crtcs = 2,
  	.routes = {
  		/* R8A779[13] has one RGB output, one LVDS output and one
-@@ -150,7 +151,8 @@ static const struct rcar_du_device_info rcar_du_r8a7795_info = {
+@@ -151,7 +152,8 @@ static const struct rcar_du_device_info rcar_du_r8a7795_info = {
  		  | RCAR_DU_FEATURE_EXT_CTRL_REGS
  		  | RCAR_DU_FEATURE_VSP1_SOURCE
  		  | RCAR_DU_FEATURE_GEN3_REGS
 -		  | RCAR_DU_FEATURE_DIDSR2_REG,
 +		  | RCAR_DU_FEATURE_DIDSR2_REG
-+		  | RCAR_DU_FEATURE_CMM | RCAR_DU_FEATURE_CMM_FBUF,
++		  | RCAR_DU_FEATURE_CMM | RCAR_DU_FEATURE_CMM_LUT_DBUF,
  	.num_crtcs = 4,
  	.routes = {
  		/* R8A7795 has one RGB output, two HDMI outputs and one
-@@ -187,7 +189,8 @@ static const struct rcar_du_device_info rcar_du_r8a7796_info = {
+@@ -188,7 +190,9 @@ static const struct rcar_du_device_info rcar_du_r8a7796_info = {
  	.features = RCAR_DU_FEATURE_CRTC_IRQ_CLOCK
  		  | RCAR_DU_FEATURE_EXT_CTRL_REGS
  		  | RCAR_DU_FEATURE_VSP1_SOURCE
 -		  | RCAR_DU_FEATURE_GEN3_REGS,
 +		  | RCAR_DU_FEATURE_GEN3_REGS
-+		  | RCAR_DU_FEATURE_CMM | RCAR_DU_FEATURE_CMM_FBUF,
++		  | RCAR_DU_FEATURE_CMM | RCAR_DU_FEATURE_CMM_LUT_DBUF
++		  | RCAR_DU_FEATURE_CMM_CLU_DBUF,
  	.num_crtcs = 3,
  	.routes = {
  		/* R8A7796 has one RGB output, one LVDS output and one
-@@ -258,6 +261,22 @@ static void rcar_du_disable_vblank(struct drm_device *dev, unsigned int pipe)
- static const struct drm_ioctl_desc rcar_du_ioctls[] = {
- 	DRM_IOCTL_DEF_DRV(DRM_RCAR_DU_SET_VMUTE, rcar_du_set_vmute,
+@@ -490,6 +494,26 @@ static const struct drm_ioctl_desc rcar_du_ioctls[] = {
+ 		DRM_UNLOCKED | DRM_CONTROL_ALLOW),
+ 	DRM_IOCTL_DEF_DRV(DRM_RCAR_DU_SCRSHOT, rcar_du_vsp_write_back,
  		DRM_UNLOCKED | DRM_CONTROL_ALLOW),
 +
 +	/* DU-CMM function */
@@ -1226,25 +1579,50 @@ index dff01e6..49a9501 100644
 +		DRM_UNLOCKED | DRM_CONTROL_ALLOW),
 +	DRM_IOCTL_DEF_DRV(RCAR_DU_CMM_SET_LUT, rcar_du_cmm_lut_set,
 +		DRM_UNLOCKED | DRM_CONTROL_ALLOW),
++	DRM_IOCTL_DEF_DRV(RCAR_DU_CMM_ALLOC, rcar_du_cmm_alloc,
++		DRM_UNLOCKED | DRM_CONTROL_ALLOW),
++	DRM_IOCTL_DEF_DRV(RCAR_DU_CMM_FREE, rcar_du_cmm_free,
++		DRM_UNLOCKED | DRM_CONTROL_ALLOW),
  };
  
  static const struct file_operations rcar_du_fops = {
+@@ -576,6 +600,9 @@ static int rcar_du_pm_suspend(struct device *dev)
+ 	}
+ #endif
+ 	for (i = 0; i < rcdu->num_crtcs; ++i) {
++		if (rcar_du_has(rcdu, RCAR_DU_FEATURE_CMM))
++			rcar_du_cmm_pm_suspend(&rcdu->crtcs[i]);
++
+ 		if (rcdu->crtcs[i].started)
+ 			rcar_du_crtc_suspend(&rcdu->crtcs[i]);
+ 	}
+@@ -594,6 +621,9 @@ static int rcar_du_pm_resume_early(struct device *dev)
+ 
+ 	for (i = 0; i < rcdu->num_crtcs; ++i) {
+ 		rcar_du_crtc_resume(&rcdu->crtcs[i]);
++
++		if (rcar_du_has(rcdu, RCAR_DU_FEATURE_CMM))
++			rcar_du_cmm_pm_resume(&rcdu->crtcs[i]);
+ 	}
+ 
+ #if IS_ENABLED(CONFIG_DRM_RCAR_LVDS)
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_drv.h b/drivers/gpu/drm/rcar-du/rcar_du_drv.h
-index 267488f..37c78d2 100644
+index 267488f..b90481d 100644
 --- a/drivers/gpu/drm/rcar-du/rcar_du_drv.h
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_drv.h
-@@ -35,6 +35,9 @@ struct rcar_du_lvdsenc;
+@@ -35,6 +35,10 @@ struct rcar_du_lvdsenc;
  #define RCAR_DU_FEATURE_GEN3_REGS	(1 << 3)	/* Use Gen3 registers */
  #define RCAR_DU_FEATURE_DIDSR2_REG	(1 << 4)	/* Has DIDSR2 register */
  
 +#define RCAR_DU_FEATURE_CMM		(1 << 10)	/* Has DEFR7 register & CMM */
-+#define RCAR_DU_FEATURE_CMM_FBUF	(1 << 11)	/* Has CMM Double buffer */
++#define RCAR_DU_FEATURE_CMM_LUT_DBUF	(1 << 11)	/* Has CMM LUT Double buffer */
++#define RCAR_DU_FEATURE_CMM_CLU_DBUF	(1 << 12)	/* Has CMM CLU Double buffer */
 +
  #define RCAR_DU_QUIRK_ALIGN_128B	(1 << 0)	/* Align pitches to 128 bytes */
  #define RCAR_DU_QUIRK_LVDS_LANES	(1 << 1)	/* LVDS lanes 1 and 3 inverted */
  
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_group.c b/drivers/gpu/drm/rcar-du/rcar_du_group.c
-index d9b22ba..72f02bc 100644
+index f48fc64..41e4c98 100644
 --- a/drivers/gpu/drm/rcar-du/rcar_du_group.c
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_group.c
 @@ -137,6 +137,11 @@ static void rcar_du_group_setup(struct rcar_du_group *rgrp)
@@ -1260,7 +1638,7 @@ index d9b22ba..72f02bc 100644
  	 * superposition 0 to DU0 pins. DU1 pins will be configured dynamically.
  	 */
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_regs.h b/drivers/gpu/drm/rcar-du/rcar_du_regs.h
-index 63dad00..13b3505 100644
+index 63dad00..65d013d 100644
 --- a/drivers/gpu/drm/rcar-du/rcar_du_regs.h
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_regs.h
 @@ -200,6 +200,11 @@
@@ -1275,7 +1653,7 @@ index 63dad00..13b3505 100644
  /* -----------------------------------------------------------------------------
   * R8A7790-only Control Registers
   */
-@@ -550,4 +555,89 @@
+@@ -550,4 +555,92 @@
  #define GCBCR			0x11098
  #define BCBCR			0x1109c
  
@@ -1315,6 +1693,7 @@ index 63dad00..13b3505 100644
 + #define CMM_CTL0_TM_BT601_YC255	(CMM_CTL0_TM1_BT601_YC255 | CMM_CTL0_TM0_BT601_YC255)
 + #define CMM_CTL0_TM_BT709_RG255	(CMM_CTL0_TM1_BT709_RG255 | CMM_CTL0_TM0_BT709_RG255)
 + #define CMM_CTL0_TM_BT709_RG235	(CMM_CTL0_TM1_BT709_RG235 | CMM_CTL0_TM0_BT709_RG235)
++ #define CMM_CTL0_CLUDB		(1 << 24)
 + #define CMM_CTL0_YC		(1 << 8)
 + #define CMM_CTL0_VPOL		(1 << 4)
 + #define CMM_CTL0_DBUF		(1 << 0)
@@ -1363,14 +1742,16 @@ index 63dad00..13b3505 100644
 +#define CMM_CLU_ADDR		0x0A00
 +#define CMM_CLU_DATA		0x0A04
 +#define CMM_LUT_TBLB_n(n)	(0x0B00 + (n * 4))
++#define CMM_CLU_ADDR2		0x0F00
++#define CMM_CLU_DATA2		0x0F04
 +
  #endif /* __RCAR_DU_REGS_H__ */
 diff --git a/include/uapi/drm/rcar_du_drm.h b/include/uapi/drm/rcar_du_drm.h
-index 8ac0296..377fe7a 100644
+index 43420db..92af22a 100644
 --- a/include/uapi/drm/rcar_du_drm.h
 +++ b/include/uapi/drm/rcar_du_drm.h
-@@ -17,11 +17,123 @@ struct rcar_du_vmute {
- 	int on;		/* Vmute function ON/OFF */
+@@ -27,10 +27,109 @@ struct rcar_du_screen_shot {
+ 	unsigned int	height;
  };
  
 +
@@ -1378,7 +1759,7 @@ index 8ac0296..377fe7a 100644
 +/* DRM_RCAR_DU_CMM_GET_HGO: DU-CMM get histogram */
 +struct rcar_du_cmm_table {
 +	unsigned int	crtc_id;
-+	unsigned int	buff;
++	unsigned int	buff;	/* set DRM_RCAR_DU_CMM_ALLOC handle */
 +	unsigned int	buff_len;
 +	unsigned long	user_data;
 +};
@@ -1406,8 +1787,17 @@ index 8ac0296..377fe7a 100644
 +	unsigned int	crtc_id;
 +	int		csc;
 +	int		lut_buf;
++	int		clu_buf;
 +};
 +
++/* DRM_RCAR_DU_CMM_ALLOC: DU-CMM alloc cma buffer */
++/* DRM_RCAR_DU_CMM_FREE: DU-CMM free cma buffer */
++struct rcar_du_cmm_buf {
++	size_t		size;		/* in */
++	uint64_t	mmap_offset;	/* out */
++	uint64_t	phy_addr;	/* out */
++	uint32_t	handle;		/* out */
++};
 +
 +/* DRM_RCAR_DU_CMM_WAIT_EVENT: DU-CMM done event */
 +#define CMM_EVENT_CLU_DONE	1
@@ -1445,12 +1835,18 @@ index 8ac0296..377fe7a 100644
 +#define LUT_DOUBLE_BUFFER_B		2
 +#define LUT_SINGLE_BUFFER		3
 +
++#define CLU_DOUBLE_BUFFER_AUTO		0
++#define CLU_DOUBLE_BUFFER_A		1
++#define CLU_DOUBLE_BUFFER_B		2
++#define CLU_SINGLE_BUFFER		3
++
 +
  /* rcar-du + vspd specific ioctls */
  #define DRM_RCAR_DU_SET_VMUTE		0
+ #define DRM_RCAR_DU_SCRSHOT		4
  
 +/* DU-CMM ioctl */
-+#define DRM_RCAR_DU_CMM_FUNC_BASE	(DRM_RCAR_DU_SET_VMUTE + 1)
++#define DRM_RCAR_DU_CMM_FUNC_BASE	(DRM_RCAR_DU_SCRSHOT + 1)
 +#define DRM_RCAR_DU_CMM_SET_CLU		(DRM_RCAR_DU_CMM_FUNC_BASE + 0)
 +#define DRM_RCAR_DU_CMM_SET_HGO		(DRM_RCAR_DU_CMM_FUNC_BASE + 1)
 +#define DRM_RCAR_DU_CMM_GET_HGO		(DRM_RCAR_DU_CMM_FUNC_BASE + 2)
@@ -1458,11 +1854,16 @@ index 8ac0296..377fe7a 100644
 +#define DRM_RCAR_DU_CMM_WAIT_EVENT	(DRM_RCAR_DU_CMM_FUNC_BASE + 4)
 +#define DRM_RCAR_DU_CMM_CONFIG		(DRM_RCAR_DU_CMM_FUNC_BASE + 5)
 +#define DRM_RCAR_DU_CMM_SET_LUT		(DRM_RCAR_DU_CMM_FUNC_BASE + 6)
++#define DRM_RCAR_DU_CMM_ALLOC		(DRM_RCAR_DU_CMM_FUNC_BASE + 7)
++#define DRM_RCAR_DU_CMM_FREE		(DRM_RCAR_DU_CMM_FUNC_BASE + 8)
 +
  #define DRM_IOCTL_DRM_RCAR_DU_SET_VMUTE \
  	DRM_IOW(DRM_COMMAND_BASE + DRM_RCAR_DU_SET_VMUTE, \
  		struct rcar_du_vmute)
- 
+@@ -38,5 +137,41 @@ struct rcar_du_screen_shot {
+ #define DRM_IOCTL_DRM_RCAR_DU_SCRSHOT \
+ 	DRM_IOW(DRM_COMMAND_BASE + DRM_RCAR_DU_SCRSHOT, \
+ 		struct rcar_du_screen_shot)
 +/* DU-CMM ioctl */
 +#define DRM_IOCTL_RCAR_DU_CMM_SET_CLU \
 +	DRM_IOW(DRM_COMMAND_BASE + DRM_RCAR_DU_CMM_SET_CLU, \
@@ -1492,6 +1893,14 @@ index 8ac0296..377fe7a 100644
 +	DRM_IOW(DRM_COMMAND_BASE + DRM_RCAR_DU_CMM_SET_LUT, \
 +		struct rcar_du_cmm_table)
 +
++#define DRM_IOCTL_RCAR_DU_CMM_ALLOC \
++	DRM_IOWR(DRM_COMMAND_BASE + DRM_RCAR_DU_CMM_ALLOC, \
++		struct rcar_du_cmm_buf)
++
++#define DRM_IOCTL_RCAR_DU_CMM_FREE \
++	DRM_IOW(DRM_COMMAND_BASE + DRM_RCAR_DU_CMM_FREE, \
++		struct rcar_du_cmm_buf)
+ 
  #endif /* __RCAR_DU_DRM_H__ */
 -- 
 1.9.1
