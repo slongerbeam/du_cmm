@@ -1,24 +1,24 @@
-From dd270554525a7cd6bd1f9551ad71faa114601087 Mon Sep 17 00:00:00 2001
+From e965117c51bdc632b729eeee0ba52e706ec6cbaa Mon Sep 17 00:00:00 2001
 From: Takashi Saito <takashi.saitou.ry@renesas.com>
-Date: Wed, 16 Dec 2015 15:44:08 +0900
-Subject: [PATCH 1/1] drm: rcar-du: Add DU CMM support
+Date: Fri, 20 Jan 2017 12:53:38 +0900
+Subject: [PATCH 1/1]  drm: rcar-du: Add DU CMM support
 
 Signed-off-by: Takashi Saito <takashi.saitou.ry@renesas.com>
 ---
  drivers/gpu/drm/rcar-du/Makefile        |    2 +
- drivers/gpu/drm/rcar-du/rcar_du_cmm.c   | 1372 +++++++++++++++++++++++++++++++
+ drivers/gpu/drm/rcar-du/rcar_du_cmm.c   | 1566 +++++++++++++++++++++++++++++++
  drivers/gpu/drm/rcar-du/rcar_du_crtc.c  |   29 +-
- drivers/gpu/drm/rcar-du/rcar_du_crtc.h  |   32 +
- drivers/gpu/drm/rcar-du/rcar_du_drv.c   |   36 +-
+ drivers/gpu/drm/rcar-du/rcar_du_crtc.h  |   33 +
+ drivers/gpu/drm/rcar-du/rcar_du_drv.c   |   45 +-
  drivers/gpu/drm/rcar-du/rcar_du_drv.h   |    4 +
  drivers/gpu/drm/rcar-du/rcar_du_group.c |    5 +
- drivers/gpu/drm/rcar-du/rcar_du_regs.h  |   93 +++
+ drivers/gpu/drm/rcar-du/rcar_du_regs.h  |   93 ++
  include/uapi/drm/rcar_du_drm.h          |  135 +++
- 9 files changed, 1702 insertions(+), 6 deletions(-)
+ 9 files changed, 1904 insertions(+), 8 deletions(-)
  create mode 100644 drivers/gpu/drm/rcar-du/rcar_du_cmm.c
 
 diff --git a/drivers/gpu/drm/rcar-du/Makefile b/drivers/gpu/drm/rcar-du/Makefile
-index 435c81b..7d83e8c 100644
+index 4666821..8846f1f 100644
 --- a/drivers/gpu/drm/rcar-du/Makefile
 +++ b/drivers/gpu/drm/rcar-du/Makefile
 @@ -6,6 +6,8 @@ rcar-du-drm-y := rcar_du_crtc.o \
@@ -28,18 +28,18 @@ index 435c81b..7d83e8c 100644
 +rcar-du-drm-y += rcar_du_cmm.o
 +
  rcar-du-drm-$(CONFIG_DRM_RCAR_HDMI)	+= rcar_du_hdmienc.o
+ 
  rcar-du-drm-$(CONFIG_DRM_RCAR_LVDS)	+= rcar_du_lvdsenc.o \
- 					   rcar_du_lvdscon.o
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_cmm.c b/drivers/gpu/drm/rcar-du/rcar_du_cmm.c
 new file mode 100644
-index 0000000..53914be
+index 0000000..b6f4936
 --- /dev/null
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_cmm.c
-@@ -0,0 +1,1372 @@
+@@ -0,0 +1,1566 @@
 +/*************************************************************************/ /*
 + DU CMM
 +
-+ Copyright (C) 2016 Renesas Electronics Corporation
++ Copyright (C) 2016 - 2017 Renesas Electronics Corporation
 +
 + License        Dual MIT/GPLv2
 +
@@ -130,43 +130,37 @@ index 0000000..53914be
 +#define CMM_CLU_NUM (17 * 17 * 17)
 +#define CMM_HGO_NUM 64
 +
-+#define EVENT_NUM	30
-+
-+struct rcar_dma_trans {
-+	u32 trans_count;
-+	u32 src_addr;
-+	u32 dist_addr;
-+	u32 control;
++enum {
++	QUE_STAT_PENDEING,
++	QUE_STAT_ACTIVE,
++	QUE_STAT_DONE,
 +};
 +
-+struct rcar_du_cmm_pendig_event {
++struct rcar_du_cmm;
++struct rcar_du_cmm_file_priv;
++
++struct rcar_du_cmm_pending_event {
 +	struct list_head link;
++	struct list_head  fpriv_link;
 +	unsigned int event;
++	unsigned int stat;
 +	unsigned long callback_data;
-+	void *vaddr;
++	struct drm_gem_object *gem_obj;
++	struct rcar_du_cmm *du_cmm;
++	struct rcar_du_cmm_file_priv *fpriv;
 +};
 +
-+struct cmm_lut_t {
-+	struct list_head list;
-+	struct rcar_du_cmm_pendig_event *p;
-+	int buf_mode;
-+};
 +
-+struct cmm_clu_t {
++struct cmm_module_t {
 +	struct list_head list;
-+	struct rcar_du_cmm_pendig_event *p;
-+	int buf_mode;
-+};
-+
-+struct cmm_hgo_t {
-+	struct list_head list;
-+	int reset;
-+};
-+
-+struct rcar_du_cmm_buf_list {
-+	struct list_head list;
-+	struct drm_gem_cma_object *cma_obj;
-+	uint32_t handle;
++	union {
++		struct {
++			struct rcar_du_cmm_pending_event *p;
++			int buf_mode;
++			bool one_side;
++		};
++		int reset;
++	};
 +};
 +
 +struct cmm_reg_save {
@@ -190,15 +184,9 @@ index 0000000..53914be
 +	void __iomem *cmm_base;
 +	unsigned long cmm_paddr;
 +
-+	struct cmm_lut_t lut;
-+	struct cmm_clu_t clu;
-+	struct cmm_hgo_t hgo;
-+
-+	struct rcar_du_cmm_pendig_event event[EVENT_NUM];
-+	struct list_head link;
-+	wait_queue_head_t event_wait;
-+	struct list_head empty_list;
-+	struct list_head event_list;
++	struct cmm_module_t lut;
++	struct cmm_module_t clu;
++	struct cmm_module_t hgo;
 +
 +	struct mutex lock;
 +	struct workqueue_struct *workqueue;
@@ -212,10 +200,21 @@ index 0000000..53914be
 +	bool init;
 +};
 +
++struct rcar_du_cmm_file_priv {
++	wait_queue_head_t event_wait;
++	struct list_head list;
++	struct list_head active_list;
++	struct list_head *done_list;
++};
 +
-+static void *du_cmm_handle_to_vaddr(uint32_t handle);
++static DEFINE_MUTEX(cmm_event_lock);
 +
-+static LIST_HEAD(cmm_buf_list);
++
++static inline void event_prev_cancel_locked(struct cmm_module_t *module);
++
++#define cmm_index(_cmm) ((_cmm)->rcrtc->index)
++#define cmm_done_list(_cmm, _fpriv) \
++	(&((_fpriv)->done_list[cmm_index(_cmm)]))
 +
 +
 +static inline u32 rcar_du_cmm_read(struct rcar_du_cmm *du_cmm, u32 reg)
@@ -390,10 +389,10 @@ index 0000000..53914be
 +			struct drm_file *file_priv)
 +{
 +	struct rcar_du_cmm_table *table = (struct rcar_du_cmm_table *)data;
++	struct rcar_du_cmm_file_priv *fpriv = file_priv->driver_priv;
 +	struct rcar_du_cmm *du_cmm;
-+	int ret = 0;
-+	struct rcar_du_cmm_pendig_event *p;
-+	void *vaddr;
++	struct rcar_du_cmm_pending_event *p;
++	struct drm_gem_object *gem_obj;
 +
 +	du_cmm = id_to_cmm(dev, table->crtc_id);
 +	if (du_cmm == NULL)
@@ -402,42 +401,35 @@ index 0000000..53914be
 +	if (table->buff_len < (CMM_LUT_NUM * 4))
 +		return -EINVAL;
 +
-+	mutex_lock(&du_cmm->lock);
++	gem_obj = drm_gem_object_lookup(file_priv, table->buff);
++	if (!gem_obj)
++		return -ENOMEM;
 +
-+	if (list_empty(&du_cmm->empty_list)) {
-+		ret = -EBUSY;
-+		goto end;
++	p = kzalloc(sizeof(*p), GFP_KERNEL);
++	if (p == NULL) {
++		drm_gem_object_unreference_unlocked(gem_obj);
++		return -ENOMEM;
 +	}
 +
-+	vaddr = du_cmm_handle_to_vaddr(table->buff);
-+	if (!vaddr) {
-+		ret = -ENOMEM;
-+		goto end;
-+	}
-+
-+	p = list_first_entry(&du_cmm->empty_list,
-+				struct rcar_du_cmm_pendig_event, link);
-+	list_del(&p->link);
-+
-+	p->vaddr = vaddr;
++	p->gem_obj = gem_obj;
 +	p->event = CMM_EVENT_LUT_DONE;
++	p->stat = QUE_STAT_PENDEING;
 +	p->callback_data = table->user_data;
++	p->du_cmm = du_cmm;
++	p->fpriv = fpriv;
++
++	mutex_lock(&cmm_event_lock);
 +
 +	list_add_tail(&p->link, &du_cmm->lut.list);
++	list_add_tail(&p->fpriv_link, &fpriv->list);
 +
-+	if (du_cmm->lut.p) {
-+		list_add_tail(&du_cmm->lut.p->link, &du_cmm->event_list);
-+		wake_up_interruptible(&du_cmm->event_wait);
-+		du_cmm->lut.p = NULL;
-+		drm_vblank_put(du_cmm->rcrtc->crtc.dev, du_cmm->rcrtc->index);
-+	}
++	event_prev_cancel_locked(&du_cmm->lut);
 +
-+	drm_vblank_get(dev, du_cmm->rcrtc->index);
++	mutex_unlock(&cmm_event_lock);
 +
-+end:
-+	mutex_unlock(&du_cmm->lock);
++	drm_crtc_vblank_get(&du_cmm->rcrtc->crtc);
 +
-+	return ret;
++	return 0;
 +}
 +
 +
@@ -445,10 +437,10 @@ index 0000000..53914be
 +			struct drm_file *file_priv)
 +{
 +	struct rcar_du_cmm_table *table = (struct rcar_du_cmm_table *)data;
++	struct rcar_du_cmm_file_priv *fpriv = file_priv->driver_priv;
 +	struct rcar_du_cmm *du_cmm;
-+	int ret = 0;
-+	struct rcar_du_cmm_pendig_event *p;
-+	void *vaddr;
++	struct rcar_du_cmm_pending_event *p;
++	struct drm_gem_object *gem_obj;
 +
 +	du_cmm = id_to_cmm(dev, table->crtc_id);
 +	if (du_cmm == NULL)
@@ -457,42 +449,35 @@ index 0000000..53914be
 +	if (table->buff_len < (CMM_CLU_NUM * 4))
 +		return -EINVAL;
 +
-+	mutex_lock(&du_cmm->lock);
++	gem_obj = drm_gem_object_lookup(file_priv, table->buff);
++	if (!gem_obj)
++		return -ENOMEM;
 +
-+	if (list_empty(&du_cmm->empty_list)) {
-+		ret = -EBUSY;
-+		goto end;
++	p = kzalloc(sizeof(*p), GFP_KERNEL);
++	if (p == NULL) {
++		drm_gem_object_unreference_unlocked(gem_obj);
++		return -ENOMEM;
 +	}
 +
-+	vaddr = du_cmm_handle_to_vaddr(table->buff);
-+	if (!vaddr) {
-+		ret = -ENOMEM;
-+		goto end;
-+	}
-+
-+	p = list_first_entry(&du_cmm->empty_list,
-+				struct rcar_du_cmm_pendig_event, link);
-+	list_del(&p->link);
-+
-+	p->vaddr = vaddr;
++	p->gem_obj = gem_obj;
 +	p->event = CMM_EVENT_CLU_DONE;
++	p->stat = QUE_STAT_PENDEING;
 +	p->callback_data = table->user_data;
++	p->du_cmm = du_cmm;
++	p->fpriv = fpriv;
++
++	mutex_lock(&cmm_event_lock);
 +
 +	list_add_tail(&p->link, &du_cmm->clu.list);
++	list_add_tail(&p->fpriv_link, &fpriv->list);
 +
-+	if (du_cmm->clu.p) {
-+		list_add_tail(&du_cmm->clu.p->link, &du_cmm->event_list);
-+		wake_up_interruptible(&du_cmm->event_wait);
-+		du_cmm->clu.p = NULL;
-+		drm_vblank_put(du_cmm->rcrtc->crtc.dev, du_cmm->rcrtc->index);
-+	}
++	event_prev_cancel_locked(&du_cmm->clu);
 +
-+	drm_vblank_get(dev, du_cmm->rcrtc->index);
++	mutex_unlock(&cmm_event_lock);
 +
-+end:
-+	mutex_unlock(&du_cmm->lock);
++	drm_crtc_vblank_get(&du_cmm->rcrtc->crtc);
 +
-+	return ret;
++	return 0;
 +}
 +
 +int rcar_du_cmm_hgo_set(struct drm_device *dev, void *data,
@@ -502,6 +487,7 @@ index 0000000..53914be
 +				(struct rcar_du_cmm_hgo_config *)data;
 +	struct rcar_du_cmm *du_cmm;
 +	const struct drm_display_mode *mode;
++	u32 hists;
 +	u32 cm2_ctl0;
 +
 +	du_cmm = id_to_cmm(dev, hgo->crtc_id);
@@ -510,12 +496,26 @@ index 0000000..53914be
 +
 +	mode = &du_cmm->rcrtc->crtc.mode;
 +
-+	if ((mode->hdisplay < (hgo->x_offset + hgo->width)) ||
++	if ((hgo->width < 1) || (hgo->height < 1) ||
++	    (mode->hdisplay < (hgo->x_offset + hgo->width)) ||
 +	    (mode->vdisplay < (hgo->y_offset + hgo->height)))
 +		return -EINVAL;
 +
-+	if (hgo->mode & ~CMM_HGO_MODE_MASK)
++	if ((hgo->mode & ~CMM_HGO_MODE_MASK) ||
++	    ((hgo->mode & (0x3 << 0)) == (0x3 << 0)) ||
++	    ((hgo->mode & (0x3 << 2)) == (0x3 << 2)))
 +		return -EINVAL;
++
++	switch (hgo->ctrl) {
++	case HGO_CTRL_BEFORE_CLU:
++		hists = 0;
++		break;
++	case HGO_CTRL_BEFORE_LUT:
++		hists = CMM_CTL0_HISTS;
++		break;
++	default:
++		return -EINVAL;
++	}
 +
 +	mutex_lock(&du_cmm->lock);
 +
@@ -535,10 +535,8 @@ index 0000000..53914be
 +	rcar_du_cmm_write(du_cmm, CMM_HGO_LB3_V, 0);
 +
 +	cm2_ctl0 = du_cmm->reg_save.cm2_ctl0;
-+	if (hgo->ctrl & HGO_CTRL_BEFORE_LUT)
-+		cm2_ctl0 |= CMM_CTL0_HISTS;
-+	else
-+		cm2_ctl0 &= ~CMM_CTL0_HISTS;
++	cm2_ctl0 &= ~CMM_CTL0_HISTS;
++	cm2_ctl0 |= hists;
 +
 +	rcar_du_cmm_write(du_cmm, CM2_CTL0, cm2_ctl0);
 +
@@ -551,7 +549,7 @@ index 0000000..53914be
 +
 +	if (du_cmm->hgo.reset == 0) {
 +		du_cmm->hgo.reset = 1;
-+		drm_vblank_get(dev, du_cmm->rcrtc->index);
++		drm_crtc_vblank_get(&du_cmm->rcrtc->crtc);
 +	}
 +
 +	mutex_unlock(&du_cmm->lock);
@@ -563,11 +561,11 @@ index 0000000..53914be
 +			struct drm_file *file_priv)
 +{
 +	struct rcar_du_cmm_table *table = (struct rcar_du_cmm_table *)data;
++	struct rcar_du_cmm_file_priv *fpriv = file_priv->driver_priv;
 +	struct rcar_du_cmm *du_cmm;
 +	int ret = 0;
-+	int i;
-+	struct rcar_du_cmm_pendig_event *p[2] = {NULL, NULL};
-+	void *vaddr;
++	struct rcar_du_cmm_pending_event *p[2];
++	struct drm_gem_object *gem_obj;
 +
 +	du_cmm = id_to_cmm(dev, table->crtc_id);
 +	if (du_cmm == NULL)
@@ -576,44 +574,58 @@ index 0000000..53914be
 +	if (table->buff_len < (CMM_HGO_NUM * 4 * 3))
 +		return -EINVAL;
 +
-+	mutex_lock(&du_cmm->lock);
++	gem_obj = drm_gem_object_lookup(file_priv, table->buff);
++	if (!gem_obj)
++		return -ENOMEM;
 +
-+	vaddr = du_cmm_handle_to_vaddr(table->buff);
-+	if (!vaddr) {
++	p[0] = kzalloc(sizeof(*p), GFP_KERNEL);
++	if (p[0] == NULL) {
 +		ret = -ENOMEM;
-+		goto end;
++		goto error_alloc1;
 +	}
 +
-+	for (i = 0; i < 2; i++) {
-+		if (list_empty(&du_cmm->empty_list)) {
-+			if (p[0] != NULL)
-+				list_add_tail(&p[0]->link, &du_cmm->empty_list);
-+			ret = -EBUSY;
-+			goto end;
-+		}
-+
-+		p[i] = list_first_entry(&du_cmm->empty_list,
-+				     struct rcar_du_cmm_pendig_event, link);
-+		list_del(&p[i]->link);
++	p[1] = kzalloc(sizeof(*p), GFP_KERNEL);
++	if (p[1] == NULL) {
++		ret = -ENOMEM;
++		goto error_alloc2;
 +	}
 +
 +	/* histogram read start event */
-+	p[0]->vaddr = NULL;
++	p[0]->gem_obj = NULL;
 +	p[0]->event = CMM_EVENT_HGO_START;
++	p[0]->stat = QUE_STAT_PENDEING;
 +	p[0]->callback_data = table->user_data;
-+	list_add_tail(&p[0]->link, &du_cmm->hgo.list);
++	p[0]->du_cmm = du_cmm;
++	p[0]->fpriv = fpriv;
 +
 +	/* histogram read end event */
-+	p[1]->vaddr = vaddr;
++	p[1]->gem_obj = gem_obj;
 +	p[1]->event = CMM_EVENT_HGO_DONE;
++	p[1]->stat = QUE_STAT_PENDEING;
 +	p[1]->callback_data = table->user_data;
++	p[1]->du_cmm = du_cmm;
++	p[1]->fpriv = fpriv;
++
++	mutex_lock(&cmm_event_lock);
++
++	list_add_tail(&p[0]->link, &du_cmm->hgo.list);
++	list_add_tail(&p[0]->fpriv_link, &fpriv->list);
++
 +	list_add_tail(&p[1]->link, &du_cmm->hgo.list);
++	list_add_tail(&p[1]->fpriv_link, &fpriv->list);
++
++	mutex_unlock(&cmm_event_lock);
 +
 +	/* start DU Vsync interrupt */
-+	drm_vblank_get(dev, du_cmm->rcrtc->index);
++	drm_crtc_vblank_get(&du_cmm->rcrtc->crtc);
++	drm_crtc_vblank_get(&du_cmm->rcrtc->crtc);
 +
-+end:
-+	mutex_unlock(&du_cmm->lock);
++	return 0;
++
++error_alloc2:
++	kfree(p[0]);
++error_alloc1:
++	drm_gem_object_unreference_unlocked(gem_obj);
 +
 +	return ret;
 +}
@@ -628,47 +640,116 @@ index 0000000..53914be
 +	if (du_cmm == NULL)
 +		return -EINVAL;
 +
-+	mutex_lock(&du_cmm->lock);
++	mutex_lock(&cmm_event_lock);
 +
 +	if (du_cmm->hgo.reset == 0) {
 +		du_cmm->hgo.reset = 1;
-+		drm_vblank_get(dev, du_cmm->rcrtc->index);
++		drm_crtc_vblank_get(&du_cmm->rcrtc->crtc);
 +	}
 +
-+	mutex_unlock(&du_cmm->lock);
++	mutex_unlock(&cmm_event_lock);
 +
 +	return 0;
 +}
++
++static int wait_event_pop(struct rcar_du_cmm *du_cmm,
++			  struct rcar_du_cmm_file_priv *fpriv,
++			  struct rcar_du_cmm_pending_event **p)
++{
++	struct rcar_du_cmm_pending_event *_p;
++
++	mutex_lock(&cmm_event_lock);
++
++	if (list_empty(cmm_done_list(du_cmm, fpriv))) {
++		mutex_unlock(&cmm_event_lock);
++		return 0;
++	}
++
++	_p = list_first_entry(cmm_done_list(du_cmm, fpriv),
++			struct rcar_du_cmm_pending_event, link);
++	list_del(&_p->link);
++	list_del(&_p->fpriv_link);
++	mutex_unlock(&cmm_event_lock);
++
++	*p = _p;
++
++	return 1;
++}
++
 +
 +int rcar_du_cmm_wait_event(struct drm_device *dev, void *data,
 +			struct drm_file *file_priv)
 +{
 +	int ret;
 +	struct rcar_du_cmm_event *event = (struct rcar_du_cmm_event *)data;
++	struct rcar_du_cmm_file_priv *fpriv = file_priv->driver_priv;
 +	struct rcar_du_cmm *du_cmm;
-+	struct rcar_du_cmm_pendig_event *p;
++	struct rcar_du_cmm_pending_event *p;
 +
 +	du_cmm = id_to_cmm(dev, event->crtc_id);
 +	if (du_cmm == NULL)
 +		return -EINVAL;
 +
-+	ret = wait_event_interruptible(du_cmm->event_wait,
-+				       !list_empty(&du_cmm->event_list));
++	ret = wait_event_interruptible(fpriv->event_wait,
++			wait_event_pop(du_cmm, fpriv, &p) ||
++			!du_cmm->active);
 +	if (ret < 0)
 +		return ret;
 +
-+	mutex_lock(&du_cmm->lock);
-+	p = list_first_entry(&du_cmm->event_list,
-+			     struct rcar_du_cmm_pendig_event, link);
-+	list_del(&p->link);
-+	mutex_unlock(&du_cmm->lock);
++	if (!du_cmm->active)
++		return -EINVAL;
 +
 +	event->event = p->event;
 +	event->callback_data = p->callback_data;
 +
-+	list_add_tail(&p->link, &du_cmm->empty_list);
++	kfree(p);
 +
 +	return 0;
++}
++
++int rcar_du_cmm_alloc(struct drm_device *dev, void *data,
++			struct drm_file *file_priv)
++{
++	struct rcar_du_cmm_buf *buf = (struct rcar_du_cmm_buf *)data;
++	struct drm_gem_cma_object *cma_obj;
++	struct drm_gem_object *gem_obj;
++	uint32_t handle;
++	u64 offset;
++	int ret = 0;
++
++	buf->handle = 0;
++
++	/* create buffer */
++	cma_obj = drm_gem_cma_create(dev, buf->size);
++	if (IS_ERR(cma_obj))
++		return -ENOMEM;
++
++	gem_obj = &cma_obj->base;
++
++	ret = drm_gem_handle_create(file_priv, gem_obj, &handle);
++	if (ret) {
++		dev->driver->gem_free_object(gem_obj);
++		return -ENOMEM;
++	}
++
++	drm_gem_object_unreference_unlocked(gem_obj);
++
++	drm_gem_cma_dumb_map_offset(file_priv, dev, handle, &offset);
++
++	/* set return value */
++	buf->handle = handle;
++	buf->mmap_offset = offset;
++	buf->phy_addr = cma_obj->paddr;
++
++	return 0;
++}
++
++int rcar_du_cmm_free(struct drm_device *dev, void *data,
++			struct drm_file *file_priv)
++{
++	struct rcar_du_cmm_buf *buf = (struct rcar_du_cmm_buf *)data;
++
++	return drm_gem_handle_delete(file_priv, buf->handle);
 +}
 +
 +static void du_cmm_clk(int index, bool on)
@@ -696,6 +777,8 @@ index 0000000..53914be
 +	struct rcar_du_cmm *du_cmm = rcrtc->cmm_handle;
 +	int i;
 +	u32 table_data;
++	const struct drm_display_mode *mode;
++	int w, h, x, y;
 +
 +	if (du_cmm == NULL)
 +		return -EINVAL;
@@ -719,6 +802,23 @@ index 0000000..53914be
 +		goto init_done;
 +
 +	du_cmm->init = true;
++
++	mode = &du_cmm->rcrtc->crtc.mode;
++
++	x = (du_cmm->reg_save.hgo_offset >> 16) & 0xFFFF;
++	y = (du_cmm->reg_save.hgo_offset >> 0)  & 0xFFFF;
++	w = (du_cmm->reg_save.hgo_size >> 16) & 0xFFFF;
++	h = (du_cmm->reg_save.hgo_size >> 0)  & 0xFFFF;
++	if ((mode->hdisplay < (w + x)) || (w == 0)) {
++		x = 0;
++		w = mode->hdisplay;
++	}
++	if ((mode->vdisplay < (h + y)) || (h == 0)) {
++		y = 0;
++		h = mode->vdisplay;
++	}
++	du_cmm->reg_save.hgo_offset = (x << 16) | y;
++	du_cmm->reg_save.hgo_size = (w << 16) | h;
 +
 +	rcar_du_cmm_write(du_cmm, CM2_CTL0, du_cmm->reg_save.cm2_ctl0);
 +	rcar_du_cmm_write(du_cmm, CMM_HGO_OFFSET, du_cmm->reg_save.hgo_offset);
@@ -781,66 +881,194 @@ index 0000000..53914be
 +	return 0;
 +}
 +
++#define gem_to_vaddr(gem_obj) \
++	(container_of((gem_obj), struct drm_gem_cma_object, base)->vaddr)
++
++static inline void cmm_vblank_put(struct rcar_du_cmm_pending_event *p)
++{
++	if (p->du_cmm)
++		drm_crtc_vblank_put(&p->du_cmm->rcrtc->crtc);
++}
++
++static inline void
++cmm_gem_object_unreferenc(struct rcar_du_cmm_pending_event *p)
++{
++	if (p->gem_obj)
++		drm_gem_object_unreference_unlocked(p->gem_obj);
++}
++
++static inline void _event_done_locked(struct rcar_du_cmm_pending_event *p)
++{
++	cmm_gem_object_unreferenc(p);
++
++	if (p->fpriv) {
++		p->stat = QUE_STAT_DONE;
++		list_del(&p->link); /* delete from p->fpriv->active_list */
++		list_add_tail(&p->link, cmm_done_list(p->du_cmm, p->fpriv));
++		wake_up_interruptible(&p->fpriv->event_wait);
++	} else {
++		/* link deleted by rcar_du_cmm_postclose */
++		kfree(p);
++	}
++}
++
++/* cancel from active_list (case of LUT/CLU double buffer mode) */
++static inline void event_prev_cancel_locked(struct cmm_module_t *module)
++{
++	struct rcar_du_cmm_pending_event *p = module->p;
++
++	if (p == NULL)
++		return;
++
++	module->p = NULL;
++
++	_event_done_locked(p);
++}
++
++static inline void event_done(struct rcar_du_cmm_pending_event *p)
++{
++	/* vblank is put */
++
++	mutex_lock(&cmm_event_lock);
++
++	_event_done_locked(p);
++
++	mutex_unlock(&cmm_event_lock);
++}
++
++
++static inline void lc_event_done(struct cmm_module_t *module,
++			       struct rcar_du_cmm_pending_event *p,
++			       bool done)
++{
++	/* vblank is put */
++
++	mutex_lock(&cmm_event_lock);
++
++	if (!done && list_empty(&module->list))
++		module->p = p;
++	else
++		_event_done_locked(p);
++
++	mutex_unlock(&cmm_event_lock);
++}
++
++static inline struct rcar_du_cmm_pending_event *
++event_pop_locked(struct cmm_module_t *module)
++{
++	struct rcar_du_cmm_pending_event *p =
++		list_first_entry(&module->list,
++				 struct rcar_du_cmm_pending_event,
++				 link);
++
++	p->stat = QUE_STAT_ACTIVE;
++	list_del(&p->link); /* delete from du_cmm->[lut|clu|hgo].list */
++	list_add_tail(&p->link, &p->fpriv->active_list);
++	cmm_vblank_put(p);
++
++	return p;
++}
++
++
++struct rcar_du_cmm_work_stat {
++	union {
++		struct {
++			struct rcar_du_cmm_pending_event *p;
++			bool done;
++			bool table_copy;
++		};
++		struct {
++			struct rcar_du_cmm_pending_event *p1;
++			struct rcar_du_cmm_pending_event *p2;
++			bool reset;
++		};
++	};
++};
++
++static inline void one_side(struct rcar_du_cmm *du_cmm,
++			    struct cmm_module_t *module,
++			    bool on)
++{
++	if (on && !module->one_side) {
++		module->one_side = 1;
++		drm_crtc_vblank_get(&du_cmm->rcrtc->crtc);
++	} else if (!on && module->one_side) {
++		module->one_side = 0;
++		drm_crtc_vblank_put(&du_cmm->rcrtc->crtc);
++	}
++}
 +
 +/* pop LUT que */
 +static int lut_pop_locked(struct rcar_du_cmm *du_cmm,
-+			  struct rcar_du_cmm_pendig_event **p,
-+			  bool *done)
++			  struct rcar_du_cmm_work_stat *stat)
 +{
-+	struct rcar_du_cmm_pendig_event *_p = NULL;
++	bool is_one_side = false;
 +
-+	*done = false;
++	stat->done = true;
++	stat->table_copy = 0;
 +
-+	if (list_empty(&du_cmm->lut.list)) {
++	if (!list_empty(&du_cmm->lut.list)) {
++		stat->p = event_pop_locked(&du_cmm->lut);
++
 +		/* prev lut table */
-+		if (du_cmm->lut.p) {
-+			_p = du_cmm->lut.p;
-+			*done = true;
-+			drm_vblank_put(du_cmm->rcrtc->crtc.dev,
-+					du_cmm->rcrtc->index);
++		event_prev_cancel_locked(&du_cmm->lut);
++
++		if (du_cmm->lut.buf_mode == LUT_DOUBLE_BUFFER_AUTO) {
++			is_one_side = true;
++			if (list_empty(&du_cmm->lut.list))
++				stat->done = false;
 +		}
++
++	} else if (du_cmm->lut.p) {
++		/* prev lut table */
++		stat->p = du_cmm->lut.p;
++		du_cmm->lut.p = NULL;
 +	} else {
-+		_p = list_first_entry(&du_cmm->lut.list,
-+				     struct rcar_du_cmm_pendig_event, link);
-+		list_del(&_p->link);
-+		if (!list_empty(&du_cmm->lut.list) ||
-+		    (du_cmm->lut.buf_mode != LUT_DOUBLE_BUFFER_AUTO)) {
-+			*done = true;
-+			drm_vblank_put(du_cmm->rcrtc->crtc.dev,
-+					du_cmm->rcrtc->index);
-+		}
-+
-+		/* prev lut table */
-+		if (du_cmm->lut.p) {
-+			list_add_tail(&du_cmm->lut.p->link,
-+					&du_cmm->event_list);
-+			wake_up_interruptible(&du_cmm->event_wait);
-+			drm_vblank_put(du_cmm->rcrtc->crtc.dev,
-+					du_cmm->rcrtc->index);
-+		}
++		stat->done = false;
++		stat->p = NULL;
++		stat->table_copy = du_cmm->lut.one_side;
 +	}
 +
-+	if (*done)
-+		du_cmm->lut.p = NULL;
-+	else
-+		du_cmm->lut.p = _p;
++	one_side(du_cmm, &du_cmm->lut, is_one_side);
 +
-+	*p = _p;
++	return 0;
++}
++
++static int lut_table_copy(struct rcar_du_cmm *du_cmm)
++{
++	int i;
++	uint32_t src, dst;
++
++	if (rcar_du_cmm_read(du_cmm, CM2_CTL1) & CMM_CTL1_BFS) {
++		dst = CMM_LUT_TBLA_n(0);
++		src = CMM_LUT_TBLB_n(0);
++	} else {
++		dst = CMM_LUT_TBLB_n(0);
++		src = CMM_LUT_TBLA_n(0);
++	}
++
++	for (i = 0; i < CMM_LUT_NUM; i++) {
++		rcar_du_cmm_write(du_cmm, dst, rcar_du_cmm_read(du_cmm, src));
++		dst += 4;
++		src += 4;
++	}
 +
 +	return 0;
 +}
 +
 +/* set 1D look up table */
 +static int lut_set(struct rcar_du_cmm *du_cmm,
-+		   struct rcar_du_cmm_pendig_event *p,
-+		   bool done)
++		   struct rcar_du_cmm_work_stat *stat)
 +{
 +	int i;
 +	uint32_t lut_base;
 +	uint32_t *lut_buf;
 +
-+	if (p == NULL)
++	if (stat->p == NULL) {
++		if (stat->table_copy)
++			lut_table_copy(du_cmm);
 +		return 0; /* skip */
++	}
 +
 +	/* set LUT */
 +	switch (du_cmm->lut.buf_mode) {
@@ -862,79 +1090,98 @@ index 0000000..53914be
 +		return -EINVAL;
 +	}
 +
-+	lut_buf = p->vaddr;
++	lut_buf = gem_to_vaddr(stat->p->gem_obj);
 +	for (i = 0; i < CMM_LUT_NUM; i++)
 +		rcar_du_cmm_write(du_cmm, lut_base + i * 4, lut_buf[i]);
 +
-+	if (done) {
-+		list_add_tail(&p->link, &du_cmm->event_list);
-+		wake_up_interruptible(&du_cmm->event_wait);
-+	}
++	lc_event_done(&du_cmm->lut, stat->p, stat->done);
 +
 +	return 0;
 +}
 +
 +/* pop CLU que */
 +static int clu_pop_locked(struct rcar_du_cmm *du_cmm,
-+			  struct rcar_du_cmm_pendig_event **p,
-+			  bool *done)
++			  struct rcar_du_cmm_work_stat *stat)
 +{
-+	struct rcar_du_cmm_pendig_event *_p = NULL;
++	bool is_one_side = false;
 +
-+	*done = false;
++	stat->done = true;
++	stat->table_copy = 0;
 +
-+	if (list_empty(&du_cmm->clu.list)) {
++	if (!list_empty(&du_cmm->clu.list)) {
++		stat->p = event_pop_locked(&du_cmm->clu);
++
 +		/* prev clu table */
-+		if (du_cmm->clu.p) {
-+			_p = du_cmm->clu.p;
-+			*done = true;
-+			drm_vblank_put(du_cmm->rcrtc->crtc.dev,
-+					du_cmm->rcrtc->index);
++		event_prev_cancel_locked(&du_cmm->clu);
++
++		if (du_cmm->clu.buf_mode == CLU_DOUBLE_BUFFER_AUTO) {
++			is_one_side = true;
++			if (list_empty(&du_cmm->clu.list))
++				stat->done = false;
 +		}
++
++	} else if (du_cmm->clu.p) {
++		/* prev clu table */
++		stat->p = du_cmm->clu.p;
++		du_cmm->clu.p = NULL;
 +	} else {
-+		_p = list_first_entry(&du_cmm->clu.list,
-+				     struct rcar_du_cmm_pendig_event, link);
-+		list_del(&_p->link);
-+		if (!list_empty(&du_cmm->clu.list) ||
-+		    (du_cmm->clu.buf_mode != CLU_DOUBLE_BUFFER_AUTO)) {
-+			*done = true;
-+			drm_vblank_put(du_cmm->rcrtc->crtc.dev,
-+					du_cmm->rcrtc->index);
-+		}
-+
-+		/* prev clu table */
-+		if (du_cmm->clu.p) {
-+			list_add_tail(&du_cmm->clu.p->link,
-+					&du_cmm->event_list);
-+			wake_up_interruptible(&du_cmm->event_wait);
-+			drm_vblank_put(du_cmm->rcrtc->crtc.dev,
-+					du_cmm->rcrtc->index);
-+		}
++		stat->done = false;
++		stat->p = NULL;
++		stat->table_copy = du_cmm->clu.one_side;
 +	}
 +
-+	if (*done)
-+		du_cmm->clu.p = NULL;
-+	else
-+		du_cmm->clu.p = _p;
++	one_side(du_cmm, &du_cmm->clu, is_one_side);
 +
-+	*p = _p;
++	return 0;
++}
++
++static int clu_table_copy(struct rcar_du_cmm *du_cmm)
++{
++	int i, j, k;
++	uint32_t src_addr, src_data, dst_addr, dst_data;
++
++	if (rcar_du_cmm_read(du_cmm, CM2_CTL1) & CMM_CTL1_BFS) {
++		dst_addr = CMM_CLU_ADDR;
++		dst_data = CMM_CLU_DATA;
++		src_addr = CMM_CLU_ADDR2;
++		src_data = CMM_CLU_DATA2;
++	} else {
++		dst_addr = CMM_CLU_ADDR2;
++		dst_data = CMM_CLU_DATA2;
++		src_addr = CMM_CLU_ADDR;
++		src_data = CMM_CLU_DATA;
++	}
++
++	rcar_du_cmm_write(du_cmm, dst_addr, 0);
++	for (i = 0; i < 17; i++) {
++		for (j = 0; j < 17; j++) {
++			for (k = 0; k < 17; k++) {
++				rcar_du_cmm_write(du_cmm, src_addr,
++					(i << 16) | (j << 8) | (k << 0));
++				rcar_du_cmm_write(du_cmm, dst_data,
++					rcar_du_cmm_read(du_cmm, src_data));
++			}
++		}
++	}
 +
 +	return 0;
 +}
 +
 +/* set 3D look up table */
 +static int clu_set(struct rcar_du_cmm *du_cmm,
-+		   struct rcar_du_cmm_pendig_event *p,
-+		   bool done)
++		   struct rcar_du_cmm_work_stat *stat)
 +{
 +	int i;
 +	uint32_t addr_reg, data_reg;
 +	uint32_t *clu_buf;
 +
-+	if (p == NULL)
++	if (stat->p == NULL) {
++		if (stat->table_copy)
++			clu_table_copy(du_cmm);
 +		return 0; /* skip */
++	}
 +
-+	/* set LUT */
++	/* set CLU */
 +	switch (du_cmm->clu.buf_mode) {
 +	case CLU_DOUBLE_BUFFER_A:
 +	case CLU_SINGLE_BUFFER:
@@ -957,47 +1204,38 @@ index 0000000..53914be
 +		return -EINVAL;
 +	}
 +
-+	clu_buf = p->vaddr;
++	clu_buf = gem_to_vaddr(stat->p->gem_obj);
 +	rcar_du_cmm_write(du_cmm, addr_reg, 0);
 +	for (i = 0; i < CMM_CLU_NUM; i++)
 +		rcar_du_cmm_write(du_cmm, data_reg, clu_buf[i]);
 +
-+	if (done) {
-+		list_add_tail(&p->link, &du_cmm->event_list);
-+		wake_up_interruptible(&du_cmm->event_wait);
-+	}
++	lc_event_done(&du_cmm->clu, stat->p, stat->done);
 +
 +	return 0;
 +}
 +
 +/* pop HGO que */
 +static int hgo_pop_locked(struct rcar_du_cmm *du_cmm,
-+			  struct rcar_du_cmm_pendig_event **p,
-+			  bool *reset)
++			  struct rcar_du_cmm_work_stat *stat)
 +{
-+	struct rcar_du_cmm_pendig_event *_p[2] = {NULL, };
-+
++	struct rcar_du_cmm_pending_event *_p[2] = {NULL, };
 +	int i;
 +
-+	*reset = false;
-+
 +	if (!list_empty(&du_cmm->hgo.list)) {
-+		for (i = 0; i < 2; i++) {
-+			_p[i] = list_first_entry(&du_cmm->hgo.list,
-+					struct rcar_du_cmm_pendig_event, link);
-+			list_del(&_p[i]->link);
-+		}
-+		drm_vblank_put(du_cmm->rcrtc->crtc.dev, du_cmm->rcrtc->index);
++		for (i = 0; i < 2; i++)
++			_p[i] = event_pop_locked(&du_cmm->hgo);
 +	}
 +
 +	if (du_cmm->hgo.reset) {
-+		drm_vblank_put(du_cmm->rcrtc->crtc.dev, du_cmm->rcrtc->index);
++		drm_crtc_vblank_put(&du_cmm->rcrtc->crtc);
 +		du_cmm->hgo.reset = 0;
-+		*reset = true;
++		stat->reset = true;
++	} else {
++		stat->reset = false;
 +	}
 +
-+	p[0] = _p[0];
-+	p[1] = _p[1];
++	stat->p1 = _p[0];
++	stat->p2 = _p[1];
 +
 +	return 0;
 +}
@@ -1005,8 +1243,7 @@ index 0000000..53914be
 +
 +/* get histogram */
 +static int hgo_get(struct rcar_du_cmm *du_cmm,
-+		   struct rcar_du_cmm_pendig_event *p_hgo[],
-+		   bool need_reset)
++		   struct rcar_du_cmm_work_stat *stat)
 +{
 +	int i, j;
 +	const u32 histo_offset[3] = {
@@ -1014,27 +1251,27 @@ index 0000000..53914be
 +		CMM_HGO_G_HISTO_n(0),
 +		CMM_HGO_B_HISTO_n(0),
 +	};
++	void *vaddr;
 +
-+	if (p_hgo[0] == NULL) {
-+		if (need_reset)
++	if (stat->p1 == NULL) {
++		if (stat->reset)
 +			goto hgo_reset;
 +
 +		return 0; /* skip */
 +	}
 +
-+	list_add_tail(&p_hgo[0]->link, &du_cmm->event_list);
-+	wake_up_interruptible(&du_cmm->event_wait);
++	event_done(stat->p1);
 +
++	vaddr = gem_to_vaddr(stat->p2->gem_obj);
 +	for (i = 0; i < 3; i++) {
-+		uint32_t *hgo_buf = p_hgo[1]->vaddr + CMM_HGO_NUM * 4 * i;
++		uint32_t *hgo_buf = vaddr + CMM_HGO_NUM * 4 * i;
 +
 +		for (j = 0; j < CMM_HGO_NUM; j++)
 +			hgo_buf[j] = rcar_du_cmm_read(du_cmm,
 +						histo_offset[i] + j * 4);
 +	}
 +
-+	list_add_tail(&p_hgo[1]->link, &du_cmm->event_list);
-+	wake_up_interruptible(&du_cmm->event_wait);
++	event_done(stat->p2);
 +
 +hgo_reset:
 +	rcar_du_cmm_write(du_cmm, CMM_HGO_REGRST, CMM_HGO_REGRST_RCLEA);
@@ -1048,28 +1285,27 @@ index 0000000..53914be
 +{
 +	struct rcar_du_cmm *du_cmm =
 +			container_of(work, struct rcar_du_cmm, work);
-+	struct rcar_du_cmm_pendig_event *p_lut;
-+	struct rcar_du_cmm_pendig_event *p_clu;
-+	struct rcar_du_cmm_pendig_event *p_hgo[2];
-+	bool lut_done, clu_done, hgo_reset;
++	struct rcar_du_cmm_work_stat s_lut;
++	struct rcar_du_cmm_work_stat s_clu;
++	struct rcar_du_cmm_work_stat s_hgo;
 +#ifdef DEBUG_PROCE_TIME
 +	struct timeval start_time, end_time;
 +	unsigned long lut_time, clu_time, hgo_time;
 +#endif
 +
-+	mutex_lock(&du_cmm->lock);
++	mutex_lock(&cmm_event_lock);
 +
-+	lut_pop_locked(du_cmm, &p_lut, &lut_done);
-+	clu_pop_locked(du_cmm, &p_clu, &clu_done);
-+	hgo_pop_locked(du_cmm, p_hgo, &hgo_reset);
++	lut_pop_locked(du_cmm, &s_lut);
++	clu_pop_locked(du_cmm, &s_clu);
++	hgo_pop_locked(du_cmm, &s_hgo);
 +
-+	mutex_unlock(&du_cmm->lock);
++	mutex_unlock(&cmm_event_lock);
 +
 +	/* set LUT */
 +#ifdef DEBUG_PROCE_TIME
 +	do_gettimeofday(&start_time);
 +#endif
-+	lut_set(du_cmm, p_lut, lut_done);
++	lut_set(du_cmm, &s_lut);
 +#ifdef DEBUG_PROCE_TIME
 +	do_gettimeofday(&end_time);
 +	lut_time = (long)diff_timevals(&start_time, &end_time);
@@ -1079,7 +1315,7 @@ index 0000000..53914be
 +#ifdef DEBUG_PROCE_TIME
 +	do_gettimeofday(&start_time);
 +#endif
-+	clu_set(du_cmm, p_clu, clu_done);
++	clu_set(du_cmm, &s_clu);
 +#ifdef DEBUG_PROCE_TIME
 +	do_gettimeofday(&end_time);
 +	clu_time = (long)diff_timevals(&start_time, &end_time);
@@ -1089,7 +1325,7 @@ index 0000000..53914be
 +#ifdef DEBUG_PROCE_TIME
 +	do_gettimeofday(&start_time);
 +#endif
-+	hgo_get(du_cmm, p_hgo, hgo_reset);
++	hgo_get(du_cmm, &s_hgo);
 +#ifdef DEBUG_PROCE_TIME
 +	do_gettimeofday(&end_time);
 +	hgo_time = (long)diff_timevals(&start_time, &end_time);
@@ -1103,11 +1339,11 @@ index 0000000..53914be
 +	{
 +		struct rcar_du_device *rcdu = du_cmm->rcrtc->group->dev;
 +
-+		if (p_lut)
++		if (s_lut.p)
 +			dev_info(rcdu->dev, "LUT %ld usec.\n", lut_time);
-+		if (p_clu)
++		if (s_clu.p)
 +			dev_info(rcdu->dev, "LUT %ld usec.\n", clu_time);
-+		if (p_hgo[0])
++		if (s_hgo.p1)
 +			dev_info(rcdu->dev, "HGO %ld usec.\n", hgo_time);
 +	}
 +#endif
@@ -1116,7 +1352,9 @@ index 0000000..53914be
 +static int du_cmm_que_empty(struct rcar_du_cmm *du_cmm)
 +{
 +	if (list_empty(&du_cmm->lut.list) && !du_cmm->lut.p &&
++	    !du_cmm->lut.one_side &&
 +	    list_empty(&du_cmm->clu.list) && !du_cmm->clu.p &&
++	    !du_cmm->clu.one_side &&
 +	    list_empty(&du_cmm->hgo.list) && !du_cmm->hgo.reset)
 +		return 1;
 +
@@ -1132,80 +1370,6 @@ index 0000000..53914be
 +
 +	if (!du_cmm_que_empty(du_cmm))
 +		queue_work(du_cmm->workqueue, &du_cmm->work);
-+}
-+
-+static void *du_cmm_handle_to_vaddr(uint32_t handle)
-+{
-+	struct rcar_du_cmm_buf_list *buf_list;
-+	void *ptr = NULL;
-+
-+	list_for_each_entry(buf_list, &cmm_buf_list, list) {
-+		if (buf_list->handle == handle) {
-+			ptr = buf_list->cma_obj->vaddr;
-+			break;
-+		}
-+	}
-+
-+	return ptr;
-+}
-+
-+DEFINE_MUTEX(du_cmm_buf_lock);
-+
-+int rcar_du_cmm_alloc(struct drm_device *dev, void *data,
-+			struct drm_file *file_priv)
-+{
-+	struct rcar_du_cmm_buf *buf = (struct rcar_du_cmm_buf *)data;
-+	struct drm_gem_cma_object *cma_obj;
-+	struct drm_gem_object *gem_obj;
-+	uint32_t handle;
-+	u64 offset;
-+	int ret = 0;
-+	struct rcar_du_cmm_buf_list *buf_list;
-+
-+	buf->handle = 0;
-+
-+	buf_list = kzalloc(sizeof(*buf_list), GFP_KERNEL);
-+	if (buf_list == NULL)
-+		return -ENOMEM;
-+
-+	mutex_lock(&du_cmm_buf_lock);
-+
-+	/* create buffer */
-+	cma_obj = drm_gem_cma_create(dev, buf->size);
-+	if (IS_ERR(cma_obj)) {
-+		kfree(buf_list);
-+		ret = -ENOMEM;
-+		goto end;
-+	}
-+
-+	gem_obj = &cma_obj->base;
-+
-+	ret = drm_gem_handle_create(file_priv, gem_obj, &handle);
-+	if (ret) {
-+		kfree(buf_list);
-+		drm_gem_cma_free_object(gem_obj);
-+		ret = -ENOMEM;
-+		goto end;
-+	}
-+
-+	drm_gem_object_unreference_unlocked(gem_obj);
-+
-+	drm_gem_cma_dumb_map_offset(file_priv, dev, handle, &offset);
-+
-+	/* set return value */
-+	buf->handle = handle;
-+	buf->mmap_offset = offset;
-+	buf->phy_addr = cma_obj->paddr;
-+
-+	/* add list */
-+	buf_list->cma_obj = cma_obj;
-+	buf_list->handle = handle;
-+	list_add_tail(&buf_list->list, &cmm_buf_list);
-+
-+end:
-+	mutex_unlock(&du_cmm_buf_lock);
-+
-+	return ret;
 +}
 +
 +#ifdef CONFIG_PM_SLEEP
@@ -1263,41 +1427,74 @@ index 0000000..53914be
 +#endif /* CONFIG_PM_SLEEP */
 +
 +
-+
-+int rcar_du_cmm_free(struct drm_device *dev, void *data,
-+			struct drm_file *file_priv)
++int rcar_du_cmm_driver_open(struct drm_device *dev, struct drm_file *file_priv)
 +{
-+	int ret;
-+	struct rcar_du_cmm_buf *buf = (struct rcar_du_cmm_buf *)data;
-+	struct rcar_du_cmm_buf_list *buf_list;
-+	int find = 0;
++	struct rcar_du_device *rcdu = dev->dev_private;
++	struct rcar_du_cmm_file_priv *fpriv;
++	int i;
 +
-+	mutex_lock(&du_cmm_buf_lock);
++	if (!rcar_du_has(rcdu, RCAR_DU_FEATURE_CMM))
++		return 0;
 +
-+	list_for_each_entry(buf_list, &cmm_buf_list, list) {
-+		if (buf_list->handle == buf->handle) {
-+			find = 1;
++	file_priv->driver_priv = NULL;
++
++	fpriv = kzalloc(sizeof(*fpriv), GFP_KERNEL);
++	if (unlikely(!fpriv))
++		return -ENOMEM;
++
++	fpriv->done_list = kcalloc(rcdu->info->num_crtcs,
++				   sizeof(*fpriv->done_list),
++				   GFP_KERNEL);
++	if (unlikely(!fpriv->done_list)) {
++		kfree(fpriv);
++		return -ENOMEM;
++	}
++
++	init_waitqueue_head(&fpriv->event_wait);
++	INIT_LIST_HEAD(&fpriv->list);
++	INIT_LIST_HEAD(&fpriv->active_list);
++	for (i = 0; i < rcdu->info->num_crtcs; i++)
++		INIT_LIST_HEAD(&fpriv->done_list[i]);
++
++	file_priv->driver_priv = fpriv;
++
++	return 0;
++}
++
++void rcar_du_cmm_postclose(struct drm_device *dev, struct drm_file *file_priv)
++{
++	struct rcar_du_device *rcdu = dev->dev_private;
++	struct rcar_du_cmm_file_priv *fpriv = file_priv->driver_priv;
++	struct rcar_du_cmm_pending_event *p, *pt;
++
++	if (!rcar_du_has(rcdu, RCAR_DU_FEATURE_CMM))
++		return;
++
++	mutex_lock(&cmm_event_lock);
++
++	/* Unlink file priv events */
++	list_for_each_entry_safe(p, pt, &fpriv->list, fpriv_link) {
++		list_del(&p->fpriv_link);
++		list_del(&p->link);
++		switch (p->stat) {
++		case QUE_STAT_PENDEING:
++			cmm_vblank_put(p);
++			cmm_gem_object_unreferenc(p);
++		case QUE_STAT_DONE:
++			kfree(p);
++			break;
++		case QUE_STAT_ACTIVE:
++			p->fpriv = NULL;
 +			break;
 +		}
 +	}
 +
-+	if (!find) {
-+		ret = 0;
-+		goto end;
-+	}
++	mutex_unlock(&cmm_event_lock);
 +
-+	list_del(&buf_list->list);
-+	kfree(buf_list);
-+
-+	ret = drm_gem_handle_delete(file_priv, buf->handle);
-+
-+end:
-+	mutex_unlock(&du_cmm_buf_lock);
-+
-+	return ret;
++	kfree(fpriv->done_list);
++	kfree(fpriv);
++	file_priv->driver_priv = NULL;
 +}
-+
-+
 +
 +int rcar_du_cmm_init(struct rcar_du_crtc *rcrtc)
 +{
@@ -1320,7 +1517,8 @@ index 0000000..53914be
 +
 +	/* DU-CMM mapping */
 +	du_cmm->cmm_paddr = cmm_addr[rcrtc->index];
-+	du_cmm->cmm_base = ioremap_nocache(du_cmm->cmm_paddr, CMM_SIZE);
++	du_cmm->cmm_base = devm_ioremap_nocache(rcdu->dev, du_cmm->cmm_paddr,
++						CMM_SIZE);
 +	if (IS_ERR(du_cmm->cmm_base)) {
 +		dev_err(rcdu->dev, "rcar-du cmm init : error mapping cmm\n");
 +		ret = PTR_ERR(du_cmm->cmm_base);
@@ -1329,7 +1527,6 @@ index 0000000..53914be
 +
 +	du_cmm->rcrtc = rcrtc;
 +
-+	du_cmm->hgo.reset = 0;
 +	du_cmm->reg_save.cm2_ctl0 = 0;
 +	du_cmm->reg_save.hgo_offset = 0;
 +	du_cmm->reg_save.hgo_size = 0;
@@ -1376,19 +1573,16 @@ index 0000000..53914be
 +	du_cmm->active = false;
 +	du_cmm->init = false;
 +
-+	INIT_LIST_HEAD(&du_cmm->event_list);
-+	INIT_LIST_HEAD(&du_cmm->empty_list);
++	mutex_init(&du_cmm->lock);
 +	INIT_LIST_HEAD(&du_cmm->lut.list);
 +	du_cmm->lut.p = NULL;
-+	du_cmm->clu.p = NULL;
++	du_cmm->lut.one_side = 0;
 +	INIT_LIST_HEAD(&du_cmm->clu.list);
++	du_cmm->clu.p = NULL;
++	du_cmm->clu.one_side = 0;
 +	INIT_LIST_HEAD(&du_cmm->hgo.list);
++	du_cmm->hgo.reset = 0;
 +
-+	init_waitqueue_head(&du_cmm->event_wait);
-+	for (i = 0; i < EVENT_NUM; i++)
-+		list_add_tail(&du_cmm->event[i].link, &du_cmm->empty_list);
-+
-+	mutex_init(&du_cmm->lock);
 +	sprintf(name, "du-cmm%d", rcrtc->index);
 +	du_cmm->workqueue = create_singlethread_workqueue(name);
 +	INIT_WORK(&du_cmm->work, du_cmm_work);
@@ -1409,10 +1603,10 @@ index 0000000..53914be
 +	return ret;
 +}
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_crtc.c b/drivers/gpu/drm/rcar-du/rcar_du_crtc.c
-index 7ece810..9b9a5a0 100644
+index 2ce07eb..4a95b9f 100644
 --- a/drivers/gpu/drm/rcar-du/rcar_du_crtc.c
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_crtc.c
-@@ -269,9 +269,20 @@ static void rcar_du_crtc_set_display_timing(struct rcar_du_crtc *rcrtc)
+@@ -276,9 +276,20 @@ static void rcar_du_crtc_set_display_timing(struct rcar_du_crtc *rcrtc)
  	rcar_du_crtc_write(rcrtc, DSMR, value);
  
  	/* Display timings */
@@ -1436,7 +1630,7 @@ index 7ece810..9b9a5a0 100644
  	rcar_du_crtc_write(rcrtc, HSWR, mode->hsync_end -
  					mode->hsync_start - 1);
  	rcar_du_crtc_write(rcrtc, HCR,  mode->htotal - 1);
-@@ -503,6 +514,9 @@ static void rcar_du_crtc_start(struct rcar_du_crtc *rcrtc)
+@@ -510,6 +521,9 @@ static void rcar_du_crtc_start(struct rcar_du_crtc *rcrtc)
  	/* Turn vertical blanking interrupt reporting back on. */
  	drm_crtc_vblank_on(crtc);
  
@@ -1446,7 +1640,7 @@ index 7ece810..9b9a5a0 100644
  	rcrtc->started = true;
  }
  
-@@ -513,6 +527,9 @@ static void rcar_du_crtc_stop(struct rcar_du_crtc *rcrtc)
+@@ -520,6 +534,9 @@ static void rcar_du_crtc_stop(struct rcar_du_crtc *rcrtc)
  	if (!rcrtc->started)
  		return;
  
@@ -1458,7 +1652,7 @@ index 7ece810..9b9a5a0 100644
  	 * will occur once the CRTC is stopped. Disabling planes when starting
 @@ -688,6 +705,10 @@ static irqreturn_t rcar_du_crtc_irq(int irq, void *arg)
  	if (status & DSSR_FRM) {
- 		drm_handle_vblank(rcrtc->crtc.dev, rcrtc->index);
+ 		drm_crtc_handle_vblank(&rcrtc->crtc);
  		rcar_du_crtc_finish_page_flip(rcrtc);
 +
 +		if (rcar_du_has(rcrtc->group->dev, RCAR_DU_FEATURE_CMM))
@@ -1467,7 +1661,7 @@ index 7ece810..9b9a5a0 100644
  		ret = IRQ_HANDLED;
  	}
  
-@@ -789,6 +810,8 @@ int rcar_du_crtc_create(struct rcar_du_group *rgrp, unsigned int index)
+@@ -803,6 +824,8 @@ int rcar_du_crtc_create(struct rcar_du_group *rgrp, unsigned int index)
  		return ret;
  	}
  
@@ -1477,24 +1671,27 @@ index 7ece810..9b9a5a0 100644
  }
  
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_crtc.h b/drivers/gpu/drm/rcar-du/rcar_du_crtc.h
-index 3476515..d87fe21 100644
+index fdd9f46..f862517 100644
 --- a/drivers/gpu/drm/rcar-du/rcar_du_crtc.h
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_crtc.h
-@@ -54,6 +54,8 @@ struct rcar_du_crtc {
- 	struct rcar_du_vsp *vsp;
- 
+@@ -56,6 +56,8 @@ struct rcar_du_crtc {
  	int lvds_ch;
+ 	bool suspend;
+ 	unsigned int lif_index;
 +
 +	void *cmm_handle;
  };
  
  struct dpll_info {
-@@ -89,4 +91,34 @@ int rcar_du_crtc_get(struct rcar_du_crtc *rcrtc);
+@@ -91,4 +93,35 @@ void rcar_du_crtc_route_output(struct drm_crtc *crtc,
+ int rcar_du_crtc_get(struct rcar_du_crtc *rcrtc);
  void rcar_du_crtc_put(struct rcar_du_crtc *rcrtc);
- void rcar_du_crtc_vbk_check(struct rcar_du_group *rgrp);
  
 +
 +/* DU-CMM functions */
++int rcar_du_cmm_init(struct rcar_du_crtc *rcrtc);
++int rcar_du_cmm_driver_open(struct drm_device *dev, struct drm_file *file_priv);
++void rcar_du_cmm_postclose(struct drm_device *dev, struct drm_file *file_priv);
 +int rcar_du_cmm_start_stop(struct rcar_du_crtc *rcrtc, bool on);
 +void rcar_du_cmm_kick(struct rcar_du_crtc *rcrtc);
 +
@@ -1504,7 +1701,6 @@ index 3476515..d87fe21 100644
 +			struct drm_file *file_priv);
 +int rcar_du_cmm_hgo_get(struct drm_device *dev, void *data,
 +			struct drm_file *file_priv);
-+int rcar_du_cmm_init(struct rcar_du_crtc *rcrtc);
 +int rcar_du_cmm_hgo_set(struct drm_device *dev, void *data,
 +			struct drm_file *file_priv);
 +int rcar_du_cmm_hgo_start(struct drm_device *dev, void *data,
@@ -1513,7 +1709,6 @@ index 3476515..d87fe21 100644
 +			struct drm_file *file_priv);
 +int rcar_du_cmm_config(struct drm_device *dev, void *data,
 +			struct drm_file *file_priv);
-+
 +int rcar_du_cmm_alloc(struct drm_device *dev, void *data,
 +			struct drm_file *file_priv);
 +int rcar_du_cmm_free(struct drm_device *dev, void *data,
@@ -1525,10 +1720,10 @@ index 3476515..d87fe21 100644
 +
  #endif /* __RCAR_DU_CRTC_H__ */
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_drv.c b/drivers/gpu/drm/rcar-du/rcar_du_drv.c
-index 6290193..70fd476 100644
+index 0db985c..90fc9ae 100644
 --- a/drivers/gpu/drm/rcar-du/rcar_du_drv.c
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_drv.c
-@@ -101,7 +101,8 @@ static const struct rcar_du_device_info rcar_du_r8a7790_info = {
+@@ -103,7 +103,8 @@
  static const struct rcar_du_device_info rcar_du_r8a7791_info = {
  	.gen = 2,
  	.features = RCAR_DU_FEATURE_CRTC_IRQ_CLOCK
@@ -1538,17 +1733,28 @@ index 6290193..70fd476 100644
  	.num_crtcs = 2,
  	.routes = {
  		/* R8A779[13] has one RGB output, one LVDS output and one
-@@ -151,7 +152,8 @@ static const struct rcar_du_device_info rcar_du_r8a7795_info = {
+@@ -175,7 +176,8 @@
  		  | RCAR_DU_FEATURE_EXT_CTRL_REGS
  		  | RCAR_DU_FEATURE_VSP1_SOURCE
- 		  | RCAR_DU_FEATURE_GEN3_REGS
--		  | RCAR_DU_FEATURE_DIDSR2_REG,
-+		  | RCAR_DU_FEATURE_DIDSR2_REG
+ 		  | RCAR_DU_FEATURE_DIDSR2_REG
+-		  | RCAR_DU_FEATURE_GEN3_REGS,
++		  | RCAR_DU_FEATURE_GEN3_REGS
 +		  | RCAR_DU_FEATURE_CMM | RCAR_DU_FEATURE_CMM_LUT_DBUF,
  	.num_crtcs = 4,
  	.routes = {
  		/* R8A7795 has one RGB output, two HDMI outputs and one
-@@ -188,7 +190,9 @@ static const struct rcar_du_device_info rcar_du_r8a7796_info = {
+@@ -212,7 +214,9 @@
+ 		  | RCAR_DU_FEATURE_EXT_CTRL_REGS
+ 		  | RCAR_DU_FEATURE_VSP1_SOURCE
+ 		  | RCAR_DU_FEATURE_DIDSR2_REG
+-		  | RCAR_DU_FEATURE_VSPDL_SOURCE,
++		  | RCAR_DU_FEATURE_VSPDL_SOURCE
++		  | RCAR_DU_FEATURE_CMM | RCAR_DU_FEATURE_CMM_LUT_DBUF
++		  | RCAR_DU_FEATURE_CMM_CLU_DBUF,
+ 	.num_crtcs = 4,
+ 	.routes = {
+ 		/* R8A7795 has one RGB output, two HDMI outputs and one
+@@ -249,7 +253,9 @@
  	.features = RCAR_DU_FEATURE_CRTC_IRQ_CLOCK
  		  | RCAR_DU_FEATURE_EXT_CTRL_REGS
  		  | RCAR_DU_FEATURE_VSP1_SOURCE
@@ -1559,9 +1765,9 @@ index 6290193..70fd476 100644
  	.num_crtcs = 3,
  	.routes = {
  		/* R8A7796 has one RGB output, one LVDS output and one
-@@ -490,6 +494,26 @@ static const struct drm_ioctl_desc rcar_du_ioctls[] = {
+@@ -334,6 +340,26 @@ static void rcar_du_disable_vblank(struct drm_device *dev, unsigned int pipe)
  		DRM_UNLOCKED | DRM_CONTROL_ALLOW),
- 	DRM_IOCTL_DEF_DRV(DRM_RCAR_DU_SCRSHOT, rcar_du_vsp_write_back,
+ 	DRM_IOCTL_DEF_DRV(RCAR_DU_SCRSHOT, rcar_du_vsp_write_back,
  		DRM_UNLOCKED | DRM_CONTROL_ALLOW),
 +
 +	/* DU-CMM function */
@@ -1586,33 +1792,47 @@ index 6290193..70fd476 100644
  };
  
  static const struct file_operations rcar_du_fops = {
-@@ -576,6 +600,9 @@ static int rcar_du_pm_suspend(struct device *dev)
+@@ -353,6 +379,8 @@ static void rcar_du_disable_vblank(struct drm_device *dev, unsigned int pipe)
+ static struct drm_driver rcar_du_driver = {
+ 	.driver_features	= DRIVER_GEM | DRIVER_MODESET | DRIVER_PRIME
+ 				| DRIVER_ATOMIC,
++	.open			= rcar_du_cmm_driver_open,
++	.postclose		= rcar_du_cmm_postclose,
+ 	.lastclose		= rcar_du_lastclose,
+ 	.get_vblank_counter	= drm_vblank_no_hw_counter,
+ 	.enable_vblank		= rcar_du_enable_vblank,
+@@ -410,6 +438,9 @@ static int rcar_du_pm_suspend(struct device *dev)
  	}
  #endif
  	for (i = 0; i < rcdu->num_crtcs; ++i) {
 +		if (rcar_du_has(rcdu, RCAR_DU_FEATURE_CMM))
 +			rcar_du_cmm_pm_suspend(&rcdu->crtcs[i]);
 +
- 		if (rcdu->crtcs[i].started)
+ 		if (rcdu->crtcs[i].started) {
  			rcar_du_crtc_suspend(&rcdu->crtcs[i]);
- 	}
-@@ -594,6 +621,9 @@ static int rcar_du_pm_resume_early(struct device *dev)
+ 			clk_set_rate(rcdu->crtcs[i].extclock, 0);
+@@ -428,9 +459,13 @@ static int rcar_du_pm_resume(struct device *dev)
  
- 	for (i = 0; i < rcdu->num_crtcs; ++i) {
+ 	encoder = NULL;
+ 
+-	for (i = 0; i < rcdu->num_crtcs; ++i)
++	for (i = 0; i < rcdu->num_crtcs; ++i) {
  		rcar_du_crtc_resume(&rcdu->crtcs[i]);
-+
+ 
 +		if (rcar_du_has(rcdu, RCAR_DU_FEATURE_CMM))
 +			rcar_du_cmm_pm_resume(&rcdu->crtcs[i]);
- 	}
- 
- #if IS_ENABLED(CONFIG_DRM_RCAR_LVDS)
++	}
++
+ #if IS_ENABLED(CONFIG_DRM_RCAR_HDMI)
+ 	list_for_each_entry(encoder,
+ 		&rcdu->ddev->mode_config.encoder_list, head) {
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_drv.h b/drivers/gpu/drm/rcar-du/rcar_du_drv.h
-index 267488f..b90481d 100644
+index 91e8fc5..82bfb4d 100644
 --- a/drivers/gpu/drm/rcar-du/rcar_du_drv.h
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_drv.h
-@@ -35,6 +35,10 @@ struct rcar_du_lvdsenc;
- #define RCAR_DU_FEATURE_GEN3_REGS	(1 << 3)	/* Use Gen3 registers */
+@@ -36,6 +36,10 @@
  #define RCAR_DU_FEATURE_DIDSR2_REG	(1 << 4)	/* Has DIDSR2 register */
+ #define RCAR_DU_FEATURE_VSPDL_SOURCE	(1 << 5)	/* Has VSPDL from VSP2 */
  
 +#define RCAR_DU_FEATURE_CMM		(1 << 10)	/* Has DEFR7 register & CMM */
 +#define RCAR_DU_FEATURE_CMM_LUT_DBUF	(1 << 11)	/* Has CMM LUT Double buffer */
@@ -1622,7 +1842,7 @@ index 267488f..b90481d 100644
  #define RCAR_DU_QUIRK_LVDS_LANES	(1 << 1)	/* LVDS lanes 1 and 3 inverted */
  
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_group.c b/drivers/gpu/drm/rcar-du/rcar_du_group.c
-index f48fc64..41e4c98 100644
+index 254103f..71d6a9e 100644
 --- a/drivers/gpu/drm/rcar-du/rcar_du_group.c
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_group.c
 @@ -137,6 +137,11 @@ static void rcar_du_group_setup(struct rcar_du_group *rgrp)
@@ -1638,7 +1858,7 @@ index f48fc64..41e4c98 100644
  	 * superposition 0 to DU0 pins. DU1 pins will be configured dynamically.
  	 */
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_regs.h b/drivers/gpu/drm/rcar-du/rcar_du_regs.h
-index 63dad00..65d013d 100644
+index 4d43d93..fc3850e 100644
 --- a/drivers/gpu/drm/rcar-du/rcar_du_regs.h
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_regs.h
 @@ -200,6 +200,11 @@
@@ -1747,7 +1967,7 @@ index 63dad00..65d013d 100644
 +
  #endif /* __RCAR_DU_REGS_H__ */
 diff --git a/include/uapi/drm/rcar_du_drm.h b/include/uapi/drm/rcar_du_drm.h
-index 43420db..92af22a 100644
+index b695b8b2a..f80a188 100644
 --- a/include/uapi/drm/rcar_du_drm.h
 +++ b/include/uapi/drm/rcar_du_drm.h
 @@ -27,10 +27,109 @@ struct rcar_du_screen_shot {
@@ -1857,11 +2077,11 @@ index 43420db..92af22a 100644
 +#define DRM_RCAR_DU_CMM_ALLOC		(DRM_RCAR_DU_CMM_FUNC_BASE + 7)
 +#define DRM_RCAR_DU_CMM_FREE		(DRM_RCAR_DU_CMM_FUNC_BASE + 8)
 +
- #define DRM_IOCTL_DRM_RCAR_DU_SET_VMUTE \
+ #define DRM_IOCTL_RCAR_DU_SET_VMUTE \
  	DRM_IOW(DRM_COMMAND_BASE + DRM_RCAR_DU_SET_VMUTE, \
  		struct rcar_du_vmute)
 @@ -38,5 +137,41 @@ struct rcar_du_screen_shot {
- #define DRM_IOCTL_DRM_RCAR_DU_SCRSHOT \
+ #define DRM_IOCTL_RCAR_DU_SCRSHOT \
  	DRM_IOW(DRM_COMMAND_BASE + DRM_RCAR_DU_SCRSHOT, \
  		struct rcar_du_screen_shot)
 +/* DU-CMM ioctl */
