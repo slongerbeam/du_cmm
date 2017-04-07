@@ -1,20 +1,21 @@
-From e965117c51bdc632b729eeee0ba52e706ec6cbaa Mon Sep 17 00:00:00 2001
+From 8990ef2ea8b29042c23edd949723811f74d64380 Mon Sep 17 00:00:00 2001
 From: Takashi Saito <takashi.saitou.ry@renesas.com>
-Date: Fri, 20 Jan 2017 12:53:38 +0900
-Subject: [PATCH 1/1]  drm: rcar-du: Add DU CMM support
+Date: Thu, 6 Apr 2017 21:44:46 +0900
+Subject: [PATCH] drm: rcar-du: Add DU CMM support
 
 Signed-off-by: Takashi Saito <takashi.saitou.ry@renesas.com>
+Signed-off-by: Koji Matsuoka <koji.matsuoka.xm@renesas.com>
 ---
  drivers/gpu/drm/rcar-du/Makefile        |    2 +
  drivers/gpu/drm/rcar-du/rcar_du_cmm.c   | 1566 +++++++++++++++++++++++++++++++
- drivers/gpu/drm/rcar-du/rcar_du_crtc.c  |   29 +-
+ drivers/gpu/drm/rcar-du/rcar_du_crtc.c  |   28 +-
  drivers/gpu/drm/rcar-du/rcar_du_crtc.h  |   33 +
  drivers/gpu/drm/rcar-du/rcar_du_drv.c   |   45 +-
  drivers/gpu/drm/rcar-du/rcar_du_drv.h   |    4 +
  drivers/gpu/drm/rcar-du/rcar_du_group.c |    5 +
  drivers/gpu/drm/rcar-du/rcar_du_regs.h  |   93 ++
  include/uapi/drm/rcar_du_drm.h          |  135 +++
- 9 files changed, 1904 insertions(+), 8 deletions(-)
+ 9 files changed, 1903 insertions(+), 8 deletions(-)
  create mode 100644 drivers/gpu/drm/rcar-du/rcar_du_cmm.c
 
 diff --git a/drivers/gpu/drm/rcar-du/Makefile b/drivers/gpu/drm/rcar-du/Makefile
@@ -1603,10 +1604,10 @@ index 0000000..b6f4936
 +	return ret;
 +}
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_crtc.c b/drivers/gpu/drm/rcar-du/rcar_du_crtc.c
-index 2ce07eb..4a95b9f 100644
+index dd1d922..a12de52 100644
 --- a/drivers/gpu/drm/rcar-du/rcar_du_crtc.c
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_crtc.c
-@@ -276,9 +276,20 @@ static void rcar_du_crtc_set_display_timing(struct rcar_du_crtc *rcrtc)
+@@ -274,9 +274,20 @@ static void rcar_du_crtc_set_display_timing(struct rcar_du_crtc *rcrtc)
  	rcar_du_crtc_write(rcrtc, DSMR, value);
  
  	/* Display timings */
@@ -1630,7 +1631,7 @@ index 2ce07eb..4a95b9f 100644
  	rcar_du_crtc_write(rcrtc, HSWR, mode->hsync_end -
  					mode->hsync_start - 1);
  	rcar_du_crtc_write(rcrtc, HCR,  mode->htotal - 1);
-@@ -510,6 +521,9 @@ static void rcar_du_crtc_start(struct rcar_du_crtc *rcrtc)
+@@ -508,6 +519,9 @@ static void rcar_du_crtc_start(struct rcar_du_crtc *rcrtc)
  	/* Turn vertical blanking interrupt reporting back on. */
  	drm_crtc_vblank_on(crtc);
  
@@ -1640,7 +1641,7 @@ index 2ce07eb..4a95b9f 100644
  	rcrtc->started = true;
  }
  
-@@ -520,6 +534,9 @@ static void rcar_du_crtc_stop(struct rcar_du_crtc *rcrtc)
+@@ -518,6 +532,9 @@ static void rcar_du_crtc_stop(struct rcar_du_crtc *rcrtc)
  	if (!rcrtc->started)
  		return;
  
@@ -1650,18 +1651,17 @@ index 2ce07eb..4a95b9f 100644
  	/* Disable all planes and wait for the change to take effect. This is
  	 * required as the DSnPR registers are updated on vblank, and no vblank
  	 * will occur once the CRTC is stopped. Disabling planes when starting
-@@ -688,6 +705,10 @@ static irqreturn_t rcar_du_crtc_irq(int irq, void *arg)
- 	if (status & DSSR_FRM) {
- 		drm_crtc_handle_vblank(&rcrtc->crtc);
- 		rcar_du_crtc_finish_page_flip(rcrtc);
-+
+@@ -690,6 +707,9 @@ static irqreturn_t rcar_du_crtc_irq(int irq, void *arg)
+ 		if (rcdu->info->gen < 3)
+ 			rcar_du_crtc_finish_page_flip(rcrtc);
+ 
 +		if (rcar_du_has(rcrtc->group->dev, RCAR_DU_FEATURE_CMM))
 +			rcar_du_cmm_kick(rcrtc);
 +
  		ret = IRQ_HANDLED;
  	}
  
-@@ -803,6 +824,8 @@ int rcar_du_crtc_create(struct rcar_du_group *rgrp, unsigned int index)
+@@ -805,6 +825,8 @@ int rcar_du_crtc_create(struct rcar_du_group *rgrp, unsigned int index)
  		return ret;
  	}
  
@@ -1671,7 +1671,7 @@ index 2ce07eb..4a95b9f 100644
  }
  
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_crtc.h b/drivers/gpu/drm/rcar-du/rcar_du_crtc.h
-index fdd9f46..f862517 100644
+index a20c37e..0081107 100644
 --- a/drivers/gpu/drm/rcar-du/rcar_du_crtc.h
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_crtc.h
 @@ -56,6 +56,8 @@ struct rcar_du_crtc {
@@ -1683,9 +1683,9 @@ index fdd9f46..f862517 100644
  };
  
  struct dpll_info {
-@@ -91,4 +93,35 @@ void rcar_du_crtc_route_output(struct drm_crtc *crtc,
- int rcar_du_crtc_get(struct rcar_du_crtc *rcrtc);
+@@ -92,4 +94,35 @@ void rcar_du_crtc_route_output(struct drm_crtc *crtc,
  void rcar_du_crtc_put(struct rcar_du_crtc *rcrtc);
+ void rcar_du_crtc_finish_page_flip(struct rcar_du_crtc *rcrtc);
  
 +
 +/* DU-CMM functions */
@@ -1720,7 +1720,7 @@ index fdd9f46..f862517 100644
 +
  #endif /* __RCAR_DU_CRTC_H__ */
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_drv.c b/drivers/gpu/drm/rcar-du/rcar_du_drv.c
-index 0db985c..90fc9ae 100644
+index 67f336d..28e4ace 100644
 --- a/drivers/gpu/drm/rcar-du/rcar_du_drv.c
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_drv.c
 @@ -103,7 +103,8 @@
@@ -1754,7 +1754,7 @@ index 0db985c..90fc9ae 100644
  	.num_crtcs = 4,
  	.routes = {
  		/* R8A7795 has one RGB output, two HDMI outputs and one
-@@ -249,7 +253,9 @@
+@@ -250,7 +254,9 @@
  	.features = RCAR_DU_FEATURE_CRTC_IRQ_CLOCK
  		  | RCAR_DU_FEATURE_EXT_CTRL_REGS
  		  | RCAR_DU_FEATURE_VSP1_SOURCE
@@ -1765,7 +1765,7 @@ index 0db985c..90fc9ae 100644
  	.num_crtcs = 3,
  	.routes = {
  		/* R8A7796 has one RGB output, one LVDS output and one
-@@ -334,6 +340,26 @@ static void rcar_du_disable_vblank(struct drm_device *dev, unsigned int pipe)
+@@ -329,6 +335,26 @@ static void rcar_du_disable_vblank(struct drm_device *dev, unsigned int pipe)
  		DRM_UNLOCKED | DRM_CONTROL_ALLOW),
  	DRM_IOCTL_DEF_DRV(RCAR_DU_SCRSHOT, rcar_du_vsp_write_back,
  		DRM_UNLOCKED | DRM_CONTROL_ALLOW),
@@ -1792,7 +1792,7 @@ index 0db985c..90fc9ae 100644
  };
  
  static const struct file_operations rcar_du_fops = {
-@@ -353,6 +379,8 @@ static void rcar_du_disable_vblank(struct drm_device *dev, unsigned int pipe)
+@@ -348,6 +374,8 @@ static void rcar_du_disable_vblank(struct drm_device *dev, unsigned int pipe)
  static struct drm_driver rcar_du_driver = {
  	.driver_features	= DRIVER_GEM | DRIVER_MODESET | DRIVER_PRIME
  				| DRIVER_ATOMIC,
@@ -1801,7 +1801,7 @@ index 0db985c..90fc9ae 100644
  	.lastclose		= rcar_du_lastclose,
  	.get_vblank_counter	= drm_vblank_no_hw_counter,
  	.enable_vblank		= rcar_du_enable_vblank,
-@@ -410,6 +438,9 @@ static int rcar_du_pm_suspend(struct device *dev)
+@@ -405,6 +433,9 @@ static int rcar_du_pm_suspend(struct device *dev)
  	}
  #endif
  	for (i = 0; i < rcdu->num_crtcs; ++i) {
@@ -1811,7 +1811,7 @@ index 0db985c..90fc9ae 100644
  		if (rcdu->crtcs[i].started) {
  			rcar_du_crtc_suspend(&rcdu->crtcs[i]);
  			clk_set_rate(rcdu->crtcs[i].extclock, 0);
-@@ -428,9 +459,13 @@ static int rcar_du_pm_resume(struct device *dev)
+@@ -423,9 +454,13 @@ static int rcar_du_pm_resume(struct device *dev)
  
  	encoder = NULL;
  
@@ -1827,7 +1827,7 @@ index 0db985c..90fc9ae 100644
  	list_for_each_entry(encoder,
  		&rcdu->ddev->mode_config.encoder_list, head) {
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_drv.h b/drivers/gpu/drm/rcar-du/rcar_du_drv.h
-index 91e8fc5..82bfb4d 100644
+index dea2aa7..d0edc7d 100644
 --- a/drivers/gpu/drm/rcar-du/rcar_du_drv.h
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_drv.h
 @@ -36,6 +36,10 @@
