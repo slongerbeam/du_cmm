@@ -1,23 +1,263 @@
-From 8990ef2ea8b29042c23edd949723811f74d64380 Mon Sep 17 00:00:00 2001
+From 2f903724572c6c00eab52742cc9482689e583403 Mon Sep 17 00:00:00 2001
 From: Takashi Saito <takashi.saitou.ry@renesas.com>
-Date: Thu, 6 Apr 2017 21:44:46 +0900
+Date: Wed, 12 Jul 2017 09:32:12 +0900
 Subject: [PATCH] drm: rcar-du: Add DU CMM support
 
+Reported-by: agheorghe <Alexandru_Gheorghe@mentor.com>
+Reported-by: Tsutomu Muroya <muroya@ksk.co.jp>
 Signed-off-by: Takashi Saito <takashi.saitou.ry@renesas.com>
 Signed-off-by: Koji Matsuoka <koji.matsuoka.xm@renesas.com>
 ---
- drivers/gpu/drm/rcar-du/Makefile        |    2 +
- drivers/gpu/drm/rcar-du/rcar_du_cmm.c   | 1566 +++++++++++++++++++++++++++++++
- drivers/gpu/drm/rcar-du/rcar_du_crtc.c  |   28 +-
- drivers/gpu/drm/rcar-du/rcar_du_crtc.h  |   33 +
- drivers/gpu/drm/rcar-du/rcar_du_drv.c   |   45 +-
- drivers/gpu/drm/rcar-du/rcar_du_drv.h   |    4 +
- drivers/gpu/drm/rcar-du/rcar_du_group.c |    5 +
- drivers/gpu/drm/rcar-du/rcar_du_regs.h  |   93 ++
- include/uapi/drm/rcar_du_drm.h          |  135 +++
- 9 files changed, 1903 insertions(+), 8 deletions(-)
+ .../boot/dts/renesas/r8a7795-es1-salvator-x.dts    |    6 +-
+ arch/arm64/boot/dts/renesas/r8a7795-es1.dtsi       |   18 +-
+ arch/arm64/boot/dts/renesas/r8a7795-salvator-x.dts |    6 +-
+ .../arm64/boot/dts/renesas/r8a7795-salvator-xs.dts |    6 +-
+ arch/arm64/boot/dts/renesas/r8a7795.dtsi           |   18 +-
+ arch/arm64/boot/dts/renesas/r8a7796-salvator-x.dts |    6 +-
+ .../arm64/boot/dts/renesas/r8a7796-salvator-xs.dts |    6 +-
+ arch/arm64/boot/dts/renesas/r8a7796.dtsi           |   18 +-
+ drivers/clk/renesas/r8a7795-cpg-mssr.c             |    4 +
+ drivers/clk/renesas/r8a7796-cpg-mssr.c             |    4 +
+ drivers/gpu/drm/rcar-du/Makefile                   |    2 +
+ drivers/gpu/drm/rcar-du/rcar_du_cmm.c              | 1545 ++++++++++++++++++++
+ drivers/gpu/drm/rcar-du/rcar_du_crtc.c             |   31 +-
+ drivers/gpu/drm/rcar-du/rcar_du_crtc.h             |   32 +
+ drivers/gpu/drm/rcar-du/rcar_du_drv.c              |   45 +-
+ drivers/gpu/drm/rcar-du/rcar_du_drv.h              |   12 +-
+ drivers/gpu/drm/rcar-du/rcar_du_group.c            |    5 +
+ drivers/gpu/drm/rcar-du/rcar_du_regs.h             |   93 ++
+ include/uapi/drm/rcar_du_drm.h                     |  131 ++
+ 19 files changed, 1960 insertions(+), 28 deletions(-)
  create mode 100644 drivers/gpu/drm/rcar-du/rcar_du_cmm.c
 
+diff --git a/arch/arm64/boot/dts/renesas/r8a7795-es1-salvator-x.dts b/arch/arm64/boot/dts/renesas/r8a7795-es1-salvator-x.dts
+index 819d9ab..3b25025 100644
+--- a/arch/arm64/boot/dts/renesas/r8a7795-es1-salvator-x.dts
++++ b/arch/arm64/boot/dts/renesas/r8a7795-es1-salvator-x.dts
+@@ -388,7 +388,11 @@
+ 		 <&cpg CPG_MOD 721>,
+ 		 <&cpg CPG_MOD 727>,
+ 		 <&programmable_clk0>, <&du_dotclkin1>, <&du_dotclkin2>,
+-		 <&programmable_clk1>;
++		 <&programmable_clk1>,
++		 <&cpg CPG_MOD 711>,
++		 <&cpg CPG_MOD 710>,
++		 <&cpg CPG_MOD 709>,
++		 <&cpg CPG_MOD 708>;
+ 
+ 	backlight-gpios = <&gpio6 7 GPIO_ACTIVE_HIGH>;
+ 
+diff --git a/arch/arm64/boot/dts/renesas/r8a7795-es1.dtsi b/arch/arm64/boot/dts/renesas/r8a7795-es1.dtsi
+index 113b5c4..2b4823d 100644
+--- a/arch/arm64/boot/dts/renesas/r8a7795-es1.dtsi
++++ b/arch/arm64/boot/dts/renesas/r8a7795-es1.dtsi
+@@ -2939,8 +2939,13 @@
+ 		du: display@feb00000 {
+ 			compatible = "renesas,du-r8a7795";
+ 			reg = <0 0xfeb00000 0 0x80000>,
+-			      <0 0xfeb90000 0 0x14>;
+-			reg-names = "du", "lvds.0";
++			      <0 0xfeb90000 0 0x14>,
++			      <0 0xfea40000 0 0x00001000>,
++			      <0 0xfea50000 0 0x00001000>,
++			      <0 0xfea60000 0 0x00001000>,
++			      <0 0xfea70000 0 0x00001000>;
++			reg-names = "du", "lvds.0",
++				    "cmm.0", "cmm.1", "cmm.2", "cmm.3";
+ 			interrupts = <GIC_SPI 256 IRQ_TYPE_LEVEL_HIGH>,
+ 				     <GIC_SPI 268 IRQ_TYPE_LEVEL_HIGH>,
+ 				     <GIC_SPI 269 IRQ_TYPE_LEVEL_HIGH>,
+@@ -2951,10 +2956,15 @@
+ 				 <&cpg CPG_MOD 721>,
+ 				 <&cpg CPG_MOD 727>,
+ 				 <&du_dotclkin0>, <&du_dotclkin1>,
+-				 <&du_dotclkin2>, <&du_dotclkin3>;
++				 <&du_dotclkin2>, <&du_dotclkin3>,
++				 <&cpg CPG_MOD 711>,
++				 <&cpg CPG_MOD 710>,
++				 <&cpg CPG_MOD 709>,
++				 <&cpg CPG_MOD 708>;
+ 			clock-names = "du.0", "du.1", "du.2", "du.3",
+ 				      "lvds.0", "dclkin.0", "dclkin.1",
+-				      "dclkin.2", "dclkin.3";
++				      "dclkin.2", "dclkin.3",
++				      "cmm.0", "cmm.1", "cmm.2", "cmm.3";
+ 			status = "disabled";
+ 
+ 			vsps = <&vspd0 &vspd1 &vspd2 &vspd3>;
+diff --git a/arch/arm64/boot/dts/renesas/r8a7795-salvator-x.dts b/arch/arm64/boot/dts/renesas/r8a7795-salvator-x.dts
+index a945c45..bbe16b0 100644
+--- a/arch/arm64/boot/dts/renesas/r8a7795-salvator-x.dts
++++ b/arch/arm64/boot/dts/renesas/r8a7795-salvator-x.dts
+@@ -384,7 +384,11 @@
+ 		 <&cpg CPG_MOD 721>,
+ 		 <&cpg CPG_MOD 727>,
+ 		 <&programmable_clk0>, <&du_dotclkin1>, <&du_dotclkin2>,
+-		 <&programmable_clk1>;
++		 <&programmable_clk1>,
++		 <&cpg CPG_MOD 711>,
++		 <&cpg CPG_MOD 710>,
++		 <&cpg CPG_MOD 709>,
++		 <&cpg CPG_MOD 708>;
+ 
+ 	backlight-gpios = <&gpio6 7 GPIO_ACTIVE_HIGH>;
+ 
+diff --git a/arch/arm64/boot/dts/renesas/r8a7795-salvator-xs.dts b/arch/arm64/boot/dts/renesas/r8a7795-salvator-xs.dts
+index 070ac3ae..312ab68 100644
+--- a/arch/arm64/boot/dts/renesas/r8a7795-salvator-xs.dts
++++ b/arch/arm64/boot/dts/renesas/r8a7795-salvator-xs.dts
+@@ -383,7 +383,11 @@
+ 		 <&cpg CPG_MOD 721>,
+ 		 <&cpg CPG_MOD 727>,
+ 		 <&programmable_clk0>, <&du_dotclkin1>, <&du_dotclkin2>,
+-		 <&programmable_clk1>;
++		 <&programmable_clk1>,
++		 <&cpg CPG_MOD 711>,
++		 <&cpg CPG_MOD 710>,
++		 <&cpg CPG_MOD 709>,
++		 <&cpg CPG_MOD 708>;
+ 
+ 	backlight-gpios = <&gpio6 7 GPIO_ACTIVE_HIGH>;
+ 
+diff --git a/arch/arm64/boot/dts/renesas/r8a7795.dtsi b/arch/arm64/boot/dts/renesas/r8a7795.dtsi
+index c56a65e..f418002 100644
+--- a/arch/arm64/boot/dts/renesas/r8a7795.dtsi
++++ b/arch/arm64/boot/dts/renesas/r8a7795.dtsi
+@@ -2858,8 +2858,13 @@
+ 		du: display@feb00000 {
+ 			compatible = "renesas,du-r8a7795";
+ 			reg = <0 0xfeb00000 0 0x80000>,
+-			      <0 0xfeb90000 0 0x14>;
+-			reg-names = "du", "lvds.0";
++			      <0 0xfeb90000 0 0x14>,
++			      <0 0xfea40000 0 0x00001000>,
++			      <0 0xfea50000 0 0x00001000>,
++			      <0 0xfea60000 0 0x00001000>,
++			      <0 0xfea70000 0 0x00001000>;
++			reg-names = "du", "lvds.0",
++					"cmm.0", "cmm.1", "cmm.2", "cmm.3";
+ 			interrupts = <GIC_SPI 256 IRQ_TYPE_LEVEL_HIGH>,
+ 				     <GIC_SPI 268 IRQ_TYPE_LEVEL_HIGH>,
+ 				     <GIC_SPI 269 IRQ_TYPE_LEVEL_HIGH>,
+@@ -2870,10 +2875,15 @@
+ 				 <&cpg CPG_MOD 721>,
+ 				 <&cpg CPG_MOD 727>,
+ 				 <&du_dotclkin0>, <&du_dotclkin1>,
+-				 <&du_dotclkin2>, <&du_dotclkin3>;
++				 <&du_dotclkin2>, <&du_dotclkin3>,
++				 <&cpg CPG_MOD 711>,
++				 <&cpg CPG_MOD 710>,
++				 <&cpg CPG_MOD 709>,
++				 <&cpg CPG_MOD 708>;
+ 			clock-names = "du.0", "du.1", "du.2", "du.3",
+ 				      "lvds.0", "dclkin.0", "dclkin.1",
+-				      "dclkin.2", "dclkin.3";
++				      "dclkin.2", "dclkin.3",
++				      "cmm.0", "cmm.1", "cmm.2", "cmm.3";
+ 			status = "disabled";
+ 
+ 			vsps = <&vspd0 &vspd1 &vspd2>;
+diff --git a/arch/arm64/boot/dts/renesas/r8a7796-salvator-x.dts b/arch/arm64/boot/dts/renesas/r8a7796-salvator-x.dts
+index 312a9e3..8a21ec0 100644
+--- a/arch/arm64/boot/dts/renesas/r8a7796-salvator-x.dts
++++ b/arch/arm64/boot/dts/renesas/r8a7796-salvator-x.dts
+@@ -511,7 +511,11 @@
+ 		 <&cpg CPG_MOD 723>,
+ 		 <&cpg CPG_MOD 722>,
+ 		 <&cpg CPG_MOD 727>,
+-		 <&programmable_clk0>, <&du_dotclkin1>, <&programmable_clk1>;
++		 <&programmable_clk0>, <&du_dotclkin1>, <&programmable_clk1>,
++		 <&cpg CPG_MOD 711>,
++		 <&cpg CPG_MOD 710>,
++		 <&cpg CPG_MOD 709>,
++		 <&cpg CPG_MOD 708>;
+ 
+ 	backlight-gpios = <&gpio6 7 GPIO_ACTIVE_HIGH>;
+ 
+diff --git a/arch/arm64/boot/dts/renesas/r8a7796-salvator-xs.dts b/arch/arm64/boot/dts/renesas/r8a7796-salvator-xs.dts
+index b14389d..5c55337 100644
+--- a/arch/arm64/boot/dts/renesas/r8a7796-salvator-xs.dts
++++ b/arch/arm64/boot/dts/renesas/r8a7796-salvator-xs.dts
+@@ -354,7 +354,11 @@
+ 		 <&cpg CPG_MOD 723>,
+ 		 <&cpg CPG_MOD 722>,
+ 		 <&cpg CPG_MOD 727>,
+-		 <&programmable_clk0>, <&du_dotclkin1>, <&programmable_clk1>;
++		 <&programmable_clk0>, <&du_dotclkin1>, <&programmable_clk1>,
++		 <&cpg CPG_MOD 711>,
++		 <&cpg CPG_MOD 710>,
++		 <&cpg CPG_MOD 709>,
++		 <&cpg CPG_MOD 708>;
+ 
+ 	backlight-gpios = <&gpio6 7 GPIO_ACTIVE_HIGH>;
+ 
+diff --git a/arch/arm64/boot/dts/renesas/r8a7796.dtsi b/arch/arm64/boot/dts/renesas/r8a7796.dtsi
+index 0929d63..a44328b 100644
+--- a/arch/arm64/boot/dts/renesas/r8a7796.dtsi
++++ b/arch/arm64/boot/dts/renesas/r8a7796.dtsi
+@@ -2607,8 +2607,13 @@
+ 		du: display@feb00000 {
+ 			compatible = "renesas,du-r8a7796";
+ 			reg = <0 0xfeb00000 0 0x70000>,
+-			      <0 0xfeb90000 0 0x14>;
+-			reg-names = "du", "lvds.0";
++			      <0 0xfeb90000 0 0x14>,
++			      <0 0xfea40000 0 0x00001000>,
++			      <0 0xfea50000 0 0x00001000>,
++			      <0 0xfea60000 0 0x00001000>,
++			      <0 0xfea70000 0 0x00001000>;
++			reg-names = "du", "lvds.0",
++					"cmm.0", "cmm.1", "cmm.2", "cmm.3";
+ 			interrupts = <GIC_SPI 256 IRQ_TYPE_LEVEL_HIGH>,
+ 				     <GIC_SPI 268 IRQ_TYPE_LEVEL_HIGH>,
+ 				     <GIC_SPI 269 IRQ_TYPE_LEVEL_HIGH>;
+@@ -2618,9 +2623,14 @@
+ 				 <&cpg CPG_MOD 727>,
+ 				 <&du_dotclkin0>,
+ 				 <&du_dotclkin1>,
+-				 <&du_dotclkin2>;
++				 <&du_dotclkin2>,
++				 <&cpg CPG_MOD 711>,
++				 <&cpg CPG_MOD 710>,
++				 <&cpg CPG_MOD 709>,
++				 <&cpg CPG_MOD 708>;
+ 			clock-names = "du.0", "du.1", "du.2", "lvds.0",
+-				      "dclkin.0", "dclkin.1", "dclkin.2";
++				      "dclkin.0", "dclkin.1", "dclkin.2",
++				      "cmm.0", "cmm.1", "cmm.2", "cmm.3";
+ 			status = "disabled";
+ 
+ 			vsps = <&vspd0 &vspd1 &vspd2>;
+diff --git a/drivers/clk/renesas/r8a7795-cpg-mssr.c b/drivers/clk/renesas/r8a7795-cpg-mssr.c
+index 9e5abc3..3c0f642 100644
+--- a/drivers/clk/renesas/r8a7795-cpg-mssr.c
++++ b/drivers/clk/renesas/r8a7795-cpg-mssr.c
+@@ -208,6 +208,10 @@ enum clk_ids {
+ 	DEF_MOD("ehci0",		 703,	R8A7795_CLK_S3D4),
+ 	DEF_MOD("hsusb",		 704,	R8A7795_CLK_S3D4),
+ 	DEF_MOD("hsusb3",		 705,	R8A7795_CLK_S3D4),
++	DEF_MOD("cmm3",			 708,	R8A7795_CLK_S2D1),
++	DEF_MOD("cmm2",			 709,	R8A7795_CLK_S2D1),
++	DEF_MOD("cmm1",			 710,	R8A7795_CLK_S2D1),
++	DEF_MOD("cmm0",			 711,	R8A7795_CLK_S2D1),
+ 	DEF_MOD("csi21",		 713,	R8A7795_CLK_CSI0), /* ES1.x */
+ 	DEF_MOD("csi20",		 714,	R8A7795_CLK_CSI0),
+ 	DEF_MOD("csi41",		 715,	R8A7795_CLK_CSI0),
+diff --git a/drivers/clk/renesas/r8a7796-cpg-mssr.c b/drivers/clk/renesas/r8a7796-cpg-mssr.c
+index 015591e..227cc3db 100644
+--- a/drivers/clk/renesas/r8a7796-cpg-mssr.c
++++ b/drivers/clk/renesas/r8a7796-cpg-mssr.c
+@@ -187,6 +187,10 @@ enum clk_ids {
+ 	DEF_MOD("ehci1",		 702,	R8A7796_CLK_S3D4),
+ 	DEF_MOD("ehci0",		 703,	R8A7796_CLK_S3D4),
+ 	DEF_MOD("hsusb",		 704,	R8A7796_CLK_S3D4),
++	DEF_MOD("cmm3",			 708,	R8A7796_CLK_S2D1),
++	DEF_MOD("cmm2",			 709,	R8A7796_CLK_S2D1),
++	DEF_MOD("cmm1",			 710,	R8A7796_CLK_S2D1),
++	DEF_MOD("cmm0",			 711,	R8A7796_CLK_S2D1),
+ 	DEF_MOD("csi20",		 714,	R8A7796_CLK_CSI0),
+ 	DEF_MOD("csi40",		 716,	R8A7796_CLK_CSI0),
+ 	DEF_MOD("du2",			 722,	R8A7796_CLK_S2D1),
 diff --git a/drivers/gpu/drm/rcar-du/Makefile b/drivers/gpu/drm/rcar-du/Makefile
 index 4666821..8846f1f 100644
 --- a/drivers/gpu/drm/rcar-du/Makefile
@@ -33,10 +273,10 @@ index 4666821..8846f1f 100644
  rcar-du-drm-$(CONFIG_DRM_RCAR_LVDS)	+= rcar_du_lvdsenc.o \
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_cmm.c b/drivers/gpu/drm/rcar-du/rcar_du_cmm.c
 new file mode 100644
-index 0000000..b6f4936
+index 0000000..880437b
 --- /dev/null
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_cmm.c
-@@ -0,0 +1,1566 @@
+@@ -0,0 +1,1545 @@
 +/*************************************************************************/ /*
 + DU CMM
 +
@@ -112,27 +352,16 @@ index 0000000..b6f4936
 +#include "rcar_du_kms.h"
 +#include "rcar_du_plane.h"
 +#include "rcar_du_regs.h"
++#include <linux/clk.h>
 +
 +/* #define DEBUG_PROCE_TIME 1 */
-+
-+/* CPF register */
-+#define CPG_BASE	0xE6150000
-+#define CPG_MSTPSR7	0x000001C4
-+#define CPG_SMSTPCR7	0x0000014C
-+#define CPG_SRCR7	0x000001CC
-+#define CPG_SRSTCLR7	0x0000095C
-+
-+#define CMM0_CLOCK_BIT (1 << 11)
-+#define CMM1_CLOCK_BIT (1 << 10)
-+#define CMM2_CLOCK_BIT (1 << 9)
-+#define CMM3_CLOCK_BIT (1 << 8)
 +
 +#define CMM_LUT_NUM 256
 +#define CMM_CLU_NUM (17 * 17 * 17)
 +#define CMM_HGO_NUM 64
 +
 +enum {
-+	QUE_STAT_PENDEING,
++	QUE_STAT_PENDING,
 +	QUE_STAT_ACTIVE,
 +	QUE_STAT_DONE,
 +};
@@ -150,7 +379,6 @@ index 0000000..b6f4936
 +	struct rcar_du_cmm *du_cmm;
 +	struct rcar_du_cmm_file_priv *fpriv;
 +};
-+
 +
 +struct cmm_module_t {
 +	struct list_head list;
@@ -183,18 +411,17 @@ index 0000000..b6f4936
 +
 +	/* CMM base address */
 +	void __iomem *cmm_base;
-+	unsigned long cmm_paddr;
++	struct clk *clock;
 +
 +	struct cmm_module_t lut;
 +	struct cmm_module_t clu;
 +	struct cmm_module_t hgo;
 +
-+	struct mutex lock;
++	struct mutex lock;	/* lock for register setting */
 +	struct workqueue_struct *workqueue;
 +	struct work_struct work;
 +
 +	struct cmm_reg_save reg_save;
-+
 +	bool active;
 +	bool dbuf;
 +	bool clu_dbuf;
@@ -210,13 +437,11 @@ index 0000000..b6f4936
 +
 +static DEFINE_MUTEX(cmm_event_lock);
 +
-+
 +static inline void event_prev_cancel_locked(struct cmm_module_t *module);
 +
 +#define cmm_index(_cmm) ((_cmm)->rcrtc->index)
 +#define cmm_done_list(_cmm, _fpriv) \
 +	(&((_fpriv)->done_list[cmm_index(_cmm)]))
-+
 +
 +static inline u32 rcar_du_cmm_read(struct rcar_du_cmm *du_cmm, u32 reg)
 +{
@@ -253,7 +478,6 @@ index 0000000..b6f4936
 +	return r | g | b;
 +}
 +
-+
 +static struct rcar_du_crtc *id_to_rcrtc(struct drm_device *dev, int crtc_id)
 +{
 +	struct drm_mode_object *obj;
@@ -273,12 +497,12 @@ index 0000000..b6f4936
 +	struct rcar_du_crtc *rcrtc = id_to_rcrtc(dev, crtc_id);
 +	struct rcar_du_cmm *du_cmm;
 +
-+	if (rcrtc == NULL)
++	if (!rcrtc)
 +		return NULL;
 +
 +	du_cmm = rcrtc->cmm_handle;
 +
-+	if (du_cmm == NULL)
++	if (!du_cmm)
 +		return NULL;
 +
 +	if (!du_cmm->active)
@@ -296,14 +520,14 @@ index 0000000..b6f4936
 +#endif
 +
 +int rcar_du_cmm_config(struct drm_device *dev, void *data,
-+			struct drm_file *file_priv)
++		       struct drm_file *file_priv)
 +{
 +	struct rcar_du_cmm_config *config = (struct rcar_du_cmm_config *)data;
 +	struct rcar_du_cmm *du_cmm;
 +	u32 cm2_ctl0;
 +
 +	du_cmm = id_to_cmm(dev, config->crtc_id);
-+	if (du_cmm == NULL)
++	if (!du_cmm)
 +		return -EINVAL;
 +
 +	cm2_ctl0 = du_cmm->reg_save.cm2_ctl0;
@@ -333,7 +557,6 @@ index 0000000..b6f4936
 +	default:
 +		return -EINVAL;
 +	}
-+
 +
 +	if (du_cmm->dbuf && du_cmm->clu_dbuf &&
 +	    (config->lut_buf == LUT_SINGLE_BUFFER) &&
@@ -396,7 +619,7 @@ index 0000000..b6f4936
 +	struct drm_gem_object *gem_obj;
 +
 +	du_cmm = id_to_cmm(dev, table->crtc_id);
-+	if (du_cmm == NULL)
++	if (!du_cmm)
 +		return -EINVAL;
 +
 +	if (table->buff_len < (CMM_LUT_NUM * 4))
@@ -407,14 +630,14 @@ index 0000000..b6f4936
 +		return -ENOMEM;
 +
 +	p = kzalloc(sizeof(*p), GFP_KERNEL);
-+	if (p == NULL) {
++	if (!p) {
 +		drm_gem_object_unreference_unlocked(gem_obj);
 +		return -ENOMEM;
 +	}
 +
 +	p->gem_obj = gem_obj;
 +	p->event = CMM_EVENT_LUT_DONE;
-+	p->stat = QUE_STAT_PENDEING;
++	p->stat = QUE_STAT_PENDING;
 +	p->callback_data = table->user_data;
 +	p->du_cmm = du_cmm;
 +	p->fpriv = fpriv;
@@ -433,7 +656,6 @@ index 0000000..b6f4936
 +	return 0;
 +}
 +
-+
 +int rcar_du_cmm_clu_set(struct drm_device *dev, void *data,
 +			struct drm_file *file_priv)
 +{
@@ -444,7 +666,7 @@ index 0000000..b6f4936
 +	struct drm_gem_object *gem_obj;
 +
 +	du_cmm = id_to_cmm(dev, table->crtc_id);
-+	if (du_cmm == NULL)
++	if (!du_cmm)
 +		return -EINVAL;
 +
 +	if (table->buff_len < (CMM_CLU_NUM * 4))
@@ -455,14 +677,14 @@ index 0000000..b6f4936
 +		return -ENOMEM;
 +
 +	p = kzalloc(sizeof(*p), GFP_KERNEL);
-+	if (p == NULL) {
++	if (!p) {
 +		drm_gem_object_unreference_unlocked(gem_obj);
 +		return -ENOMEM;
 +	}
 +
 +	p->gem_obj = gem_obj;
 +	p->event = CMM_EVENT_CLU_DONE;
-+	p->stat = QUE_STAT_PENDEING;
++	p->stat = QUE_STAT_PENDING;
 +	p->callback_data = table->user_data;
 +	p->du_cmm = du_cmm;
 +	p->fpriv = fpriv;
@@ -492,7 +714,7 @@ index 0000000..b6f4936
 +	u32 cm2_ctl0;
 +
 +	du_cmm = id_to_cmm(dev, hgo->crtc_id);
-+	if (du_cmm == NULL)
++	if (!du_cmm)
 +		return -EINVAL;
 +
 +	mode = &du_cmm->rcrtc->crtc.mode;
@@ -521,9 +743,9 @@ index 0000000..b6f4936
 +	mutex_lock(&du_cmm->lock);
 +
 +	rcar_du_cmm_write(du_cmm, CMM_HGO_OFFSET,
-+		(hgo->x_offset << 16) | (hgo->y_offset << 0));
++			  (hgo->x_offset << 16) | (hgo->y_offset << 0));
 +	rcar_du_cmm_write(du_cmm, CMM_HGO_SIZE,
-+		(hgo->width << 16) | (hgo->height << 0));
++			  (hgo->width << 16) | (hgo->height << 0));
 +	rcar_du_cmm_write(du_cmm, CMM_HGO_MODE, hgo->mode);
 +	rcar_du_cmm_write(du_cmm, CMM_HGO_LB_TH, 0);
 +	rcar_du_cmm_write(du_cmm, CMM_HGO_LB0_H, 0);
@@ -569,7 +791,7 @@ index 0000000..b6f4936
 +	struct drm_gem_object *gem_obj;
 +
 +	du_cmm = id_to_cmm(dev, table->crtc_id);
-+	if (du_cmm == NULL)
++	if (!du_cmm)
 +		return -EINVAL;
 +
 +	if (table->buff_len < (CMM_HGO_NUM * 4 * 3))
@@ -579,14 +801,14 @@ index 0000000..b6f4936
 +	if (!gem_obj)
 +		return -ENOMEM;
 +
-+	p[0] = kzalloc(sizeof(*p), GFP_KERNEL);
-+	if (p[0] == NULL) {
++	p[0] = kzalloc(sizeof(*p[0]), GFP_KERNEL);
++	if (!p[0]) {
 +		ret = -ENOMEM;
 +		goto error_alloc1;
 +	}
 +
-+	p[1] = kzalloc(sizeof(*p), GFP_KERNEL);
-+	if (p[1] == NULL) {
++	p[1] = kzalloc(sizeof(*p[1]), GFP_KERNEL);
++	if (!p[1]) {
 +		ret = -ENOMEM;
 +		goto error_alloc2;
 +	}
@@ -594,7 +816,7 @@ index 0000000..b6f4936
 +	/* histogram read start event */
 +	p[0]->gem_obj = NULL;
 +	p[0]->event = CMM_EVENT_HGO_START;
-+	p[0]->stat = QUE_STAT_PENDEING;
++	p[0]->stat = QUE_STAT_PENDING;
 +	p[0]->callback_data = table->user_data;
 +	p[0]->du_cmm = du_cmm;
 +	p[0]->fpriv = fpriv;
@@ -602,7 +824,7 @@ index 0000000..b6f4936
 +	/* histogram read end event */
 +	p[1]->gem_obj = gem_obj;
 +	p[1]->event = CMM_EVENT_HGO_DONE;
-+	p[1]->stat = QUE_STAT_PENDEING;
++	p[1]->stat = QUE_STAT_PENDING;
 +	p[1]->callback_data = table->user_data;
 +	p[1]->du_cmm = du_cmm;
 +	p[1]->fpriv = fpriv;
@@ -632,13 +854,13 @@ index 0000000..b6f4936
 +}
 +
 +int rcar_du_cmm_hgo_start(struct drm_device *dev, void *data,
-+			struct drm_file *file_priv)
++			  struct drm_file *file_priv)
 +{
 +	int crtc_id = *(int *)data;
 +	struct rcar_du_cmm *du_cmm;
 +
 +	du_cmm = id_to_cmm(dev, crtc_id);
-+	if (du_cmm == NULL)
++	if (!du_cmm)
 +		return -EINVAL;
 +
 +	mutex_lock(&cmm_event_lock);
@@ -655,31 +877,27 @@ index 0000000..b6f4936
 +
 +static int wait_event_pop(struct rcar_du_cmm *du_cmm,
 +			  struct rcar_du_cmm_file_priv *fpriv,
++			  unsigned int event_type,
 +			  struct rcar_du_cmm_pending_event **p)
 +{
 +	struct rcar_du_cmm_pending_event *_p;
-+
++	*p = NULL;
 +	mutex_lock(&cmm_event_lock);
-+
-+	if (list_empty(cmm_done_list(du_cmm, fpriv))) {
-+		mutex_unlock(&cmm_event_lock);
-+		return 0;
++	list_for_each_entry(_p, cmm_done_list(du_cmm, fpriv), link) {
++		if (_p->event == event_type) {
++			*p = _p;
++			list_del(&_p->link);
++			list_del(&_p->fpriv_link);
++			break;
++		}
 +	}
-+
-+	_p = list_first_entry(cmm_done_list(du_cmm, fpriv),
-+			struct rcar_du_cmm_pending_event, link);
-+	list_del(&_p->link);
-+	list_del(&_p->fpriv_link);
 +	mutex_unlock(&cmm_event_lock);
 +
-+	*p = _p;
-+
-+	return 1;
++	return *p ? 1 : 0;
 +}
 +
-+
 +int rcar_du_cmm_wait_event(struct drm_device *dev, void *data,
-+			struct drm_file *file_priv)
++			   struct drm_file *file_priv)
 +{
 +	int ret;
 +	struct rcar_du_cmm_event *event = (struct rcar_du_cmm_event *)data;
@@ -688,12 +906,15 @@ index 0000000..b6f4936
 +	struct rcar_du_cmm_pending_event *p;
 +
 +	du_cmm = id_to_cmm(dev, event->crtc_id);
-+	if (du_cmm == NULL)
++	if (!du_cmm)
 +		return -EINVAL;
 +
 +	ret = wait_event_interruptible(fpriv->event_wait,
-+			wait_event_pop(du_cmm, fpriv, &p) ||
-+			!du_cmm->active);
++				       wait_event_pop(du_cmm,
++						      fpriv,
++						      event->event,
++						      &p) ||
++						      !du_cmm->active);
 +	if (ret < 0)
 +		return ret;
 +
@@ -709,12 +930,12 @@ index 0000000..b6f4936
 +}
 +
 +int rcar_du_cmm_alloc(struct drm_device *dev, void *data,
-+			struct drm_file *file_priv)
++		      struct drm_file *file_priv)
 +{
 +	struct rcar_du_cmm_buf *buf = (struct rcar_du_cmm_buf *)data;
 +	struct drm_gem_cma_object *cma_obj;
 +	struct drm_gem_object *gem_obj;
-+	uint32_t handle;
++	u32 handle;
 +	u64 offset;
 +	int ret = 0;
 +
@@ -735,42 +956,30 @@ index 0000000..b6f4936
 +
 +	drm_gem_object_unreference_unlocked(gem_obj);
 +
-+	drm_gem_cma_dumb_map_offset(file_priv, dev, handle, &offset);
++	ret = drm_gem_cma_dumb_map_offset(file_priv, dev, handle, &offset);
 +
 +	/* set return value */
 +	buf->handle = handle;
 +	buf->mmap_offset = offset;
 +	buf->phy_addr = cma_obj->paddr;
 +
-+	return 0;
++	return ret;
 +}
 +
 +int rcar_du_cmm_free(struct drm_device *dev, void *data,
-+			struct drm_file *file_priv)
++		     struct drm_file *file_priv)
 +{
 +	struct rcar_du_cmm_buf *buf = (struct rcar_du_cmm_buf *)data;
 +
 +	return drm_gem_handle_delete(file_priv, buf->handle);
 +}
 +
-+static void du_cmm_clk(int index, bool on)
++static void du_cmm_clk(struct rcar_du_cmm *du_cmm, bool on)
 +{
-+	const uint32_t cmm_clk_bit[] = {CMM0_CLOCK_BIT, CMM1_CLOCK_BIT,
-+					CMM2_CLOCK_BIT, CMM3_CLOCK_BIT};
-+	void __iomem *cpg_reg;
-+	uint32_t srstclr7_data;
-+
-+	if (index >= 4)
-+		return;
-+
-+	cpg_reg = ioremap_nocache(CPG_BASE, 0x1000);
-+	srstclr7_data = ioread32(cpg_reg + CPG_MSTPSR7);
 +	if (on)
-+		srstclr7_data &= ~cmm_clk_bit[index];
++		clk_prepare_enable(du_cmm->clock);
 +	else
-+		srstclr7_data |= cmm_clk_bit[index];
-+	iowrite32(srstclr7_data, cpg_reg + CPG_SMSTPCR7);
-+	iounmap(cpg_reg);
++		clk_disable_unprepare(du_cmm->clock);
 +}
 +
 +int rcar_du_cmm_start_stop(struct rcar_du_crtc *rcrtc, bool on)
@@ -781,7 +990,7 @@ index 0000000..b6f4936
 +	const struct drm_display_mode *mode;
 +	int w, h, x, y;
 +
-+	if (du_cmm == NULL)
++	if (!du_cmm)
 +		return -EINVAL;
 +
 +	mutex_lock(&du_cmm->lock);
@@ -792,12 +1001,12 @@ index 0000000..b6f4936
 +		rcar_du_cmm_write(du_cmm, CMM_LUT_CTRL, 0x00000000);
 +		rcar_du_cmm_write(du_cmm, CMM_CLU_CTRL, 0x00000000);
 +
-+		du_cmm_clk(rcrtc->index, false);
++		du_cmm_clk(du_cmm, false);
 +
 +		goto end;
 +	}
 +
-+	du_cmm_clk(rcrtc->index, true);
++	du_cmm_clk(du_cmm, true);
 +
 +	if (du_cmm->init)
 +		goto init_done;
@@ -842,15 +1051,15 @@ index 0000000..b6f4936
 +	#else
 +		table_data = ((i << 16) | (i << 8) | (i << 0));
 +	#endif /* CONFIG_PM_SLEEP */
-+		rcar_du_cmm_write(du_cmm, CMM_LUT_TBLA_n(i), table_data);
++		rcar_du_cmm_write(du_cmm, CMM_LUT_TBLA(i), table_data);
 +
 +		if (du_cmm->dbuf)
-+			rcar_du_cmm_write(du_cmm, CMM_LUT_TBLB_n(i),
-+				table_data);
++			rcar_du_cmm_write(du_cmm, CMM_LUT_TBLB(i),
++					  table_data);
 +	}
 +
 +	rcar_du_cmm_write(du_cmm, CMM_CLU_CTRL,
-+		CMM_CLU_CTRL_AAI | CMM_CLU_CTRL_MVS);
++			  CMM_CLU_CTRL_AAI | CMM_CLU_CTRL_MVS);
 +
 +	rcar_du_cmm_write(du_cmm, CMM_CLU_ADDR, 0);
 +	if (du_cmm->clu_dbuf)
@@ -866,14 +1075,14 @@ index 0000000..b6f4936
 +
 +		if (du_cmm->dbuf)
 +			rcar_du_cmm_write(du_cmm, CMM_CLU_DATA2,
-+				table_data);
++					  table_data);
 +	}
 +
 +init_done:
 +	/* enable color table */
 +	rcar_du_cmm_write(du_cmm, CMM_LUT_CTRL, CMM_LUT_CTRL_EN);
-+	rcar_du_cmm_write(du_cmm, CMM_CLU_CTRL,
-+		CMM_CLU_CTRL_AAI | CMM_CLU_CTRL_MVS | CMM_CLU_CTRL_EN);
++	rcar_du_cmm_write(du_cmm, CMM_CLU_CTRL, CMM_CLU_CTRL_AAI |
++			  CMM_CLU_CTRL_MVS | CMM_CLU_CTRL_EN);
 +
 +	du_cmm->active = true;
 +end:
@@ -892,7 +1101,7 @@ index 0000000..b6f4936
 +}
 +
 +static inline void
-+cmm_gem_object_unreferenc(struct rcar_du_cmm_pending_event *p)
++cmm_gem_object_unreference(struct rcar_du_cmm_pending_event *p)
 +{
 +	if (p->gem_obj)
 +		drm_gem_object_unreference_unlocked(p->gem_obj);
@@ -900,7 +1109,7 @@ index 0000000..b6f4936
 +
 +static inline void _event_done_locked(struct rcar_du_cmm_pending_event *p)
 +{
-+	cmm_gem_object_unreferenc(p);
++	cmm_gem_object_unreference(p);
 +
 +	if (p->fpriv) {
 +		p->stat = QUE_STAT_DONE;
@@ -918,7 +1127,7 @@ index 0000000..b6f4936
 +{
 +	struct rcar_du_cmm_pending_event *p = module->p;
 +
-+	if (p == NULL)
++	if (!p)
 +		return;
 +
 +	module->p = NULL;
@@ -937,10 +1146,9 @@ index 0000000..b6f4936
 +	mutex_unlock(&cmm_event_lock);
 +}
 +
-+
 +static inline void lc_event_done(struct cmm_module_t *module,
-+			       struct rcar_du_cmm_pending_event *p,
-+			       bool done)
++				 struct rcar_du_cmm_pending_event *p,
++				 bool done)
 +{
 +	/* vblank is put */
 +
@@ -970,7 +1178,6 @@ index 0000000..b6f4936
 +	return p;
 +}
 +
-+
 +struct rcar_du_cmm_work_stat {
 +	union {
 +		struct {
@@ -991,10 +1198,10 @@ index 0000000..b6f4936
 +			    bool on)
 +{
 +	if (on && !module->one_side) {
-+		module->one_side = 1;
++		module->one_side = true;
 +		drm_crtc_vblank_get(&du_cmm->rcrtc->crtc);
 +	} else if (!on && module->one_side) {
-+		module->one_side = 0;
++		module->one_side = false;
 +		drm_crtc_vblank_put(&du_cmm->rcrtc->crtc);
 +	}
 +}
@@ -1006,7 +1213,7 @@ index 0000000..b6f4936
 +	bool is_one_side = false;
 +
 +	stat->done = true;
-+	stat->table_copy = 0;
++	stat->table_copy = false;
 +
 +	if (!list_empty(&du_cmm->lut.list)) {
 +		stat->p = event_pop_locked(&du_cmm->lut);
@@ -1038,14 +1245,14 @@ index 0000000..b6f4936
 +static int lut_table_copy(struct rcar_du_cmm *du_cmm)
 +{
 +	int i;
-+	uint32_t src, dst;
++	u32 src, dst;
 +
 +	if (rcar_du_cmm_read(du_cmm, CM2_CTL1) & CMM_CTL1_BFS) {
-+		dst = CMM_LUT_TBLA_n(0);
-+		src = CMM_LUT_TBLB_n(0);
++		dst = CMM_LUT_TBLA(0);
++		src = CMM_LUT_TBLB(0);
 +	} else {
-+		dst = CMM_LUT_TBLB_n(0);
-+		src = CMM_LUT_TBLA_n(0);
++		dst = CMM_LUT_TBLB(0);
++		src = CMM_LUT_TBLA(0);
 +	}
 +
 +	for (i = 0; i < CMM_LUT_NUM; i++) {
@@ -1062,10 +1269,10 @@ index 0000000..b6f4936
 +		   struct rcar_du_cmm_work_stat *stat)
 +{
 +	int i;
-+	uint32_t lut_base;
-+	uint32_t *lut_buf;
++	u32 lut_base;
++	u32 *lut_buf;
 +
-+	if (stat->p == NULL) {
++	if (!stat->p) {
 +		if (stat->table_copy)
 +			lut_table_copy(du_cmm);
 +		return 0; /* skip */
@@ -1075,16 +1282,16 @@ index 0000000..b6f4936
 +	switch (du_cmm->lut.buf_mode) {
 +	case LUT_DOUBLE_BUFFER_A:
 +	case LUT_SINGLE_BUFFER:
-+		lut_base = CMM_LUT_TBLA_n(0);
++		lut_base = CMM_LUT_TBLA(0);
 +		break;
 +
 +	case LUT_DOUBLE_BUFFER_AUTO:
 +		if (rcar_du_cmm_read(du_cmm, CM2_CTL1) & CMM_CTL1_BFS) {
-+			lut_base = CMM_LUT_TBLA_n(0);
++			lut_base = CMM_LUT_TBLA(0);
 +			break;
 +		}
 +	case LUT_DOUBLE_BUFFER_B:
-+		lut_base = CMM_LUT_TBLB_n(0);
++		lut_base = CMM_LUT_TBLB(0);
 +		break;
 +
 +	default:
@@ -1107,7 +1314,7 @@ index 0000000..b6f4936
 +	bool is_one_side = false;
 +
 +	stat->done = true;
-+	stat->table_copy = 0;
++	stat->table_copy = false;
 +
 +	if (!list_empty(&du_cmm->clu.list)) {
 +		stat->p = event_pop_locked(&du_cmm->clu);
@@ -1139,7 +1346,7 @@ index 0000000..b6f4936
 +static int clu_table_copy(struct rcar_du_cmm *du_cmm)
 +{
 +	int i, j, k;
-+	uint32_t src_addr, src_data, dst_addr, dst_data;
++	u32 src_addr, src_data, dst_addr, dst_data;
 +
 +	if (rcar_du_cmm_read(du_cmm, CM2_CTL1) & CMM_CTL1_BFS) {
 +		dst_addr = CMM_CLU_ADDR;
@@ -1157,10 +1364,11 @@ index 0000000..b6f4936
 +	for (i = 0; i < 17; i++) {
 +		for (j = 0; j < 17; j++) {
 +			for (k = 0; k < 17; k++) {
-+				rcar_du_cmm_write(du_cmm, src_addr,
-+					(i << 16) | (j << 8) | (k << 0));
++				rcar_du_cmm_write(du_cmm, src_addr, (i << 16) |
++						  (j << 8) | (k << 0));
 +				rcar_du_cmm_write(du_cmm, dst_data,
-+					rcar_du_cmm_read(du_cmm, src_data));
++						  rcar_du_cmm_read(du_cmm,
++								   src_data));
 +			}
 +		}
 +	}
@@ -1173,10 +1381,10 @@ index 0000000..b6f4936
 +		   struct rcar_du_cmm_work_stat *stat)
 +{
 +	int i;
-+	uint32_t addr_reg, data_reg;
-+	uint32_t *clu_buf;
++	u32 addr_reg, data_reg;
++	u32 *clu_buf;
 +
-+	if (stat->p == NULL) {
++	if (!stat->p) {
 +		if (stat->table_copy)
 +			clu_table_copy(du_cmm);
 +		return 0; /* skip */
@@ -1241,20 +1449,19 @@ index 0000000..b6f4936
 +	return 0;
 +}
 +
-+
 +/* get histogram */
 +static int hgo_get(struct rcar_du_cmm *du_cmm,
 +		   struct rcar_du_cmm_work_stat *stat)
 +{
 +	int i, j;
 +	const u32 histo_offset[3] = {
-+		CMM_HGO_R_HISTO_n(0),
-+		CMM_HGO_G_HISTO_n(0),
-+		CMM_HGO_B_HISTO_n(0),
++		CMM_HGO_R_HISTO(0),
++		CMM_HGO_G_HISTO(0),
++		CMM_HGO_B_HISTO(0),
 +	};
 +	void *vaddr;
 +
-+	if (stat->p1 == NULL) {
++	if (!stat->p1) {
 +		if (stat->reset)
 +			goto hgo_reset;
 +
@@ -1265,7 +1472,7 @@ index 0000000..b6f4936
 +
 +	vaddr = gem_to_vaddr(stat->p2->gem_obj);
 +	for (i = 0; i < 3; i++) {
-+		uint32_t *hgo_buf = vaddr + CMM_HGO_NUM * 4 * i;
++		u32 *hgo_buf = vaddr + CMM_HGO_NUM * 4 * i;
 +
 +		for (j = 0; j < CMM_HGO_NUM; j++)
 +			hgo_buf[j] = rcar_du_cmm_read(du_cmm,
@@ -1279,8 +1486,6 @@ index 0000000..b6f4936
 +
 +	return 0;
 +}
-+
-+
 +
 +static void du_cmm_work(struct work_struct *work)
 +{
@@ -1366,7 +1571,7 @@ index 0000000..b6f4936
 +{
 +	struct rcar_du_cmm *du_cmm = rcrtc->cmm_handle;
 +
-+	if (du_cmm == NULL)
++	if (!du_cmm)
 +		return;
 +
 +	if (!du_cmm_que_empty(du_cmm))
@@ -1393,12 +1598,12 @@ index 0000000..b6f4936
 +	du_cmm->init = false;
 +
 +	if (!du_cmm->active)
-+		du_cmm_clk(rcrtc->index, true);
++		du_cmm_clk(du_cmm, true);
 +
 +	/* table save */
 +	for (i = 0; i < CMM_LUT_NUM; i++) {
 +		du_cmm->reg_save.lut_table[i] =
-+			rcar_du_cmm_read(du_cmm, CMM_LUT_TBLA_n(i));
++			rcar_du_cmm_read(du_cmm, CMM_LUT_TBLA(i));
 +	}
 +
 +	index = 0;
@@ -1406,7 +1611,8 @@ index 0000000..b6f4936
 +		for (j = 0; j < 17; j++) {
 +			for (k = 0; k < 17; k++) {
 +				rcar_du_cmm_write(du_cmm, CMM_CLU_ADDR,
-+					(i << 16) | (j << 8) | (k << 0));
++						  (i << 16) | (j << 8) |
++						  (k << 0));
 +				du_cmm->reg_save.clu_table[index++] =
 +					rcar_du_cmm_read(du_cmm, CMM_CLU_DATA);
 +			}
@@ -1414,7 +1620,7 @@ index 0000000..b6f4936
 +	}
 +
 +	if (!du_cmm->active)
-+		du_cmm_clk(rcrtc->index, false);
++		du_cmm_clk(du_cmm, false);
 +
 +	return 0;
 +}
@@ -1424,9 +1630,7 @@ index 0000000..b6f4936
 +	/* none */
 +	return 0;
 +}
-+
 +#endif /* CONFIG_PM_SLEEP */
-+
 +
 +int rcar_du_cmm_driver_open(struct drm_device *dev, struct drm_file *file_priv)
 +{
@@ -1478,9 +1682,9 @@ index 0000000..b6f4936
 +		list_del(&p->fpriv_link);
 +		list_del(&p->link);
 +		switch (p->stat) {
-+		case QUE_STAT_PENDEING:
++		case QUE_STAT_PENDING:
 +			cmm_vblank_put(p);
-+			cmm_gem_object_unreferenc(p);
++			cmm_gem_object_unreference(p);
 +		case QUE_STAT_DONE:
 +			kfree(p);
 +			break;
@@ -1502,28 +1706,40 @@ index 0000000..b6f4936
 +	struct rcar_du_cmm *du_cmm;
 +	int ret;
 +	int i;
-+	const uint32_t cmm_addr[] = {CMM0_ADDR, CMM1_ADDR,
-+				     CMM2_ADDR, CMM3_ADDR};
 +	struct rcar_du_device *rcdu = rcrtc->group->dev;
 +	char name[64];
++	struct resource *mem;
 +
 +	if (!rcar_du_has(rcdu, RCAR_DU_FEATURE_CMM))
 +		return 0;
 +
 +	du_cmm = devm_kzalloc(rcdu->dev, sizeof(*du_cmm), GFP_KERNEL);
-+	if (du_cmm == NULL) {
++	if (!du_cmm) {
 +		ret = -ENOMEM;
 +		goto error_alloc;
 +	}
 +
 +	/* DU-CMM mapping */
-+	du_cmm->cmm_paddr = cmm_addr[rcrtc->index];
-+	du_cmm->cmm_base = devm_ioremap_nocache(rcdu->dev, du_cmm->cmm_paddr,
-+						CMM_SIZE);
-+	if (IS_ERR(du_cmm->cmm_base)) {
-+		dev_err(rcdu->dev, "rcar-du cmm init : error mapping cmm\n");
-+		ret = PTR_ERR(du_cmm->cmm_base);
++	sprintf(name, "cmm.%u", rcrtc->index);
++	mem = platform_get_resource_byname(to_platform_device(rcdu->dev),
++					   IORESOURCE_MEM, name);
++	if (!mem) {
++		dev_err(rcdu->dev, "rcar-du cmm init : failed to get memory resource\n");
++		ret = -EINVAL;
 +		goto error_mapping_cmm;
++	}
++	du_cmm->cmm_base = devm_ioremap_nocache(rcdu->dev, mem->start,
++						resource_size(mem));
++	if (!du_cmm->cmm_base) {
++		dev_err(rcdu->dev, "rcar-du cmm init : failed to map iomem\n");
++		ret = -EINVAL;
++		goto error_mapping_cmm;
++	}
++	du_cmm->clock = devm_clk_get(rcdu->dev, name);
++	if (IS_ERR(du_cmm->clock)) {
++		dev_err(rcdu->dev, "failed to get clock\n");
++		ret = PTR_ERR(du_cmm->clock);
++		goto error_clock_cmm;
 +	}
 +
 +	du_cmm->rcrtc = rcrtc;
@@ -1552,7 +1768,7 @@ index 0000000..b6f4936
 +#ifdef CONFIG_PM_SLEEP
 +	du_cmm->reg_save.lut_table =
 +		devm_kzalloc(rcdu->dev, CMM_LUT_NUM * 4, GFP_KERNEL);
-+	if (du_cmm->reg_save.lut_table == NULL) {
++	if (!du_cmm->reg_save.lut_table) {
 +		ret = -ENOMEM;
 +		goto error_lut_reg_save_buf;
 +	}
@@ -1561,7 +1777,7 @@ index 0000000..b6f4936
 +
 +	du_cmm->reg_save.clu_table =
 +		devm_kzalloc(rcdu->dev, CMM_CLU_NUM * 4, GFP_KERNEL);
-+	if (du_cmm->reg_save.clu_table == NULL) {
++	if (!du_cmm->reg_save.clu_table) {
 +		ret = -ENOMEM;
 +		goto error_clu_reg_save_buf;
 +	}
@@ -1577,10 +1793,10 @@ index 0000000..b6f4936
 +	mutex_init(&du_cmm->lock);
 +	INIT_LIST_HEAD(&du_cmm->lut.list);
 +	du_cmm->lut.p = NULL;
-+	du_cmm->lut.one_side = 0;
++	du_cmm->lut.one_side = false;
 +	INIT_LIST_HEAD(&du_cmm->clu.list);
 +	du_cmm->clu.p = NULL;
-+	du_cmm->clu.one_side = 0;
++	du_cmm->clu.one_side = false;
 +	INIT_LIST_HEAD(&du_cmm->hgo.list);
 +	du_cmm->hgo.reset = 0;
 +
@@ -1591,7 +1807,7 @@ index 0000000..b6f4936
 +	rcrtc->cmm_handle = du_cmm;
 +
 +	dev_info(rcdu->dev, "DU%d use CMM(%s buffer)\n",
-+		rcrtc->index, du_cmm->dbuf ? "Double" : "Single");
++		 rcrtc->index, du_cmm->dbuf ? "Double" : "Single");
 +
 +	return 0;
 +
@@ -1599,15 +1815,18 @@ index 0000000..b6f4936
 +error_clu_reg_save_buf:
 +error_lut_reg_save_buf:
 +#endif /* CONFIG_PM_SLEEP */
++error_clock_cmm:
++	devm_iounmap(rcdu->dev, du_cmm->cmm_base);
 +error_mapping_cmm:
++	devm_kfree(rcdu->dev, du_cmm);
 +error_alloc:
 +	return ret;
 +}
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_crtc.c b/drivers/gpu/drm/rcar-du/rcar_du_crtc.c
-index dd1d922..a12de52 100644
+index e54fa74..92a800c 100644
 --- a/drivers/gpu/drm/rcar-du/rcar_du_crtc.c
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_crtc.c
-@@ -274,9 +274,20 @@ static void rcar_du_crtc_set_display_timing(struct rcar_du_crtc *rcrtc)
+@@ -277,9 +277,20 @@ static void rcar_du_crtc_set_display_timing(struct rcar_du_crtc *rcrtc)
  	rcar_du_crtc_write(rcrtc, DSMR, value);
  
  	/* Display timings */
@@ -1616,34 +1835,33 @@ index dd1d922..a12de52 100644
 -					mode->hdisplay - 19);
 +
 +	if (rcar_du_has(rcrtc->group->dev, RCAR_DU_FEATURE_CMM)) {
-+		rcar_du_crtc_write(rcrtc, HDSR,
-+			mode->htotal - mode->hsync_start - 19 - 25);
-+		rcar_du_crtc_write(rcrtc, HDER,
-+			mode->htotal - mode->hsync_start +
-+			mode->hdisplay - 19 - 25);
++		rcar_du_crtc_write(rcrtc, HDSR, mode->htotal -
++						mode->hsync_start - 19 - 25);
++		rcar_du_crtc_write(rcrtc, HDER, mode->htotal -
++						mode->hsync_start +
++						mode->hdisplay - 19 - 25);
 +	} else {
-+		rcar_du_crtc_write(rcrtc, HDSR,
-+			mode->htotal - mode->hsync_start - 19);
-+		rcar_du_crtc_write(rcrtc,
-+			HDER, mode->htotal - mode->hsync_start +
-+			mode->hdisplay - 19);
++		rcar_du_crtc_write(rcrtc, HDSR, mode->htotal -
++						mode->hsync_start - 19);
++		rcar_du_crtc_write(rcrtc, HDER, mode->htotal -
++						mode->hsync_start +
++						mode->hdisplay - 19);
 +	}
  	rcar_du_crtc_write(rcrtc, HSWR, mode->hsync_end -
  					mode->hsync_start - 1);
  	rcar_du_crtc_write(rcrtc, HCR,  mode->htotal - 1);
-@@ -508,6 +519,9 @@ static void rcar_du_crtc_start(struct rcar_du_crtc *rcrtc)
- 	/* Turn vertical blanking interrupt reporting back on. */
- 	drm_crtc_vblank_on(crtc);
+@@ -510,12 +521,18 @@ static void rcar_du_crtc_start(struct rcar_du_crtc *rcrtc)
  
+ 	rcar_du_group_start_stop(rcrtc->group, true, rcrtc);
+ 	rcar_du_crtc_vbk_check(rcrtc);
++
 +	if (rcar_du_has(rcrtc->group->dev, RCAR_DU_FEATURE_CMM))
 +		rcar_du_cmm_start_stop(rcrtc, true);
-+
- 	rcrtc->started = true;
  }
  
-@@ -518,6 +532,9 @@ static void rcar_du_crtc_stop(struct rcar_du_crtc *rcrtc)
- 	if (!rcrtc->started)
- 		return;
+ static void rcar_du_crtc_stop(struct rcar_du_crtc *rcrtc)
+ {
+ 	struct drm_crtc *crtc = &rcrtc->crtc;
  
 +	if (rcar_du_has(rcrtc->group->dev, RCAR_DU_FEATURE_CMM))
 +		rcar_du_cmm_start_stop(rcrtc, false);
@@ -1651,9 +1869,9 @@ index dd1d922..a12de52 100644
  	/* Disable all planes and wait for the change to take effect. This is
  	 * required as the DSnPR registers are updated on vblank, and no vblank
  	 * will occur once the CRTC is stopped. Disabling planes when starting
-@@ -690,6 +707,9 @@ static irqreturn_t rcar_du_crtc_irq(int irq, void *arg)
- 		if (rcdu->info->gen < 3)
+@@ -744,6 +761,9 @@ static irqreturn_t rcar_du_crtc_irq(int irq, void *arg)
  			rcar_du_crtc_finish_page_flip(rcrtc);
+ 		}
  
 +		if (rcar_du_has(rcrtc->group->dev, RCAR_DU_FEATURE_CMM))
 +			rcar_du_cmm_kick(rcrtc);
@@ -1661,7 +1879,17 @@ index dd1d922..a12de52 100644
  		ret = IRQ_HANDLED;
  	}
  
-@@ -805,6 +825,8 @@ int rcar_du_crtc_create(struct rcar_du_group *rgrp, unsigned int index)
+@@ -843,7 +863,8 @@ int rcar_du_crtc_create(struct rcar_du_group *rgrp, unsigned int index)
+ 	 *
+ 	 * Do not register the IRQ handler in this instance.
+ 	 */
+-	if (rcar_du_has(rcdu, RCAR_DU_FEATURE_VSP1_SOURCE))
++	if ((rcar_du_has(rcdu, RCAR_DU_FEATURE_VSP1_SOURCE)) &&
++	    (!rcar_du_has(rcdu, RCAR_DU_FEATURE_CMM)))
+ 		return 0;
+ 
+ 	/* Register the interrupt handler. */
+@@ -868,6 +889,8 @@ int rcar_du_crtc_create(struct rcar_du_group *rgrp, unsigned int index)
  		return ret;
  	}
  
@@ -1671,7 +1899,7 @@ index dd1d922..a12de52 100644
  }
  
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_crtc.h b/drivers/gpu/drm/rcar-du/rcar_du_crtc.h
-index a20c37e..0081107 100644
+index fe90f10..b01a450 100644
 --- a/drivers/gpu/drm/rcar-du/rcar_du_crtc.h
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_crtc.h
 @@ -56,6 +56,8 @@ struct rcar_du_crtc {
@@ -1683,11 +1911,10 @@ index a20c37e..0081107 100644
  };
  
  struct dpll_info {
-@@ -92,4 +94,35 @@ void rcar_du_crtc_route_output(struct drm_crtc *crtc,
+@@ -92,4 +94,34 @@ void rcar_du_crtc_route_output(struct drm_crtc *crtc,
  void rcar_du_crtc_put(struct rcar_du_crtc *rcrtc);
  void rcar_du_crtc_finish_page_flip(struct rcar_du_crtc *rcrtc);
  
-+
 +/* DU-CMM functions */
 +int rcar_du_cmm_init(struct rcar_du_crtc *rcrtc);
 +int rcar_du_cmm_driver_open(struct drm_device *dev, struct drm_file *file_priv);
@@ -1704,15 +1931,15 @@ index a20c37e..0081107 100644
 +int rcar_du_cmm_hgo_set(struct drm_device *dev, void *data,
 +			struct drm_file *file_priv);
 +int rcar_du_cmm_hgo_start(struct drm_device *dev, void *data,
-+			struct drm_file *file_priv);
++			  struct drm_file *file_priv);
 +int rcar_du_cmm_wait_event(struct drm_device *dev, void *data,
-+			struct drm_file *file_priv);
++			   struct drm_file *file_priv);
 +int rcar_du_cmm_config(struct drm_device *dev, void *data,
-+			struct drm_file *file_priv);
++		       struct drm_file *file_priv);
 +int rcar_du_cmm_alloc(struct drm_device *dev, void *data,
-+			struct drm_file *file_priv);
++		      struct drm_file *file_priv);
 +int rcar_du_cmm_free(struct drm_device *dev, void *data,
-+			struct drm_file *file_priv);
++		     struct drm_file *file_priv);
 +#ifdef CONFIG_PM_SLEEP
 +int rcar_du_cmm_pm_suspend(struct rcar_du_crtc *rcrtc);
 +int rcar_du_cmm_pm_resume(struct rcar_du_crtc *rcrtc);
@@ -1720,7 +1947,7 @@ index a20c37e..0081107 100644
 +
  #endif /* __RCAR_DU_CRTC_H__ */
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_drv.c b/drivers/gpu/drm/rcar-du/rcar_du_drv.c
-index 67f336d..28e4ace 100644
+index eb088cb..a0a9c86 100644
 --- a/drivers/gpu/drm/rcar-du/rcar_du_drv.c
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_drv.c
 @@ -103,7 +103,8 @@
@@ -1765,34 +1992,34 @@ index 67f336d..28e4ace 100644
  	.num_crtcs = 3,
  	.routes = {
  		/* R8A7796 has one RGB output, one LVDS output and one
-@@ -329,6 +335,26 @@ static void rcar_du_disable_vblank(struct drm_device *dev, unsigned int pipe)
+@@ -336,6 +342,26 @@ static void rcar_du_disable_vblank(struct drm_device *dev, unsigned int pipe)
  		DRM_UNLOCKED | DRM_CONTROL_ALLOW),
  	DRM_IOCTL_DEF_DRV(RCAR_DU_SCRSHOT, rcar_du_vsp_write_back,
  		DRM_UNLOCKED | DRM_CONTROL_ALLOW),
 +
 +	/* DU-CMM function */
 +	DRM_IOCTL_DEF_DRV(RCAR_DU_CMM_SET_CLU, rcar_du_cmm_clu_set,
-+		DRM_UNLOCKED | DRM_CONTROL_ALLOW),
++			  DRM_UNLOCKED | DRM_CONTROL_ALLOW),
 +	DRM_IOCTL_DEF_DRV(RCAR_DU_CMM_SET_HGO, rcar_du_cmm_hgo_set,
-+		DRM_UNLOCKED | DRM_CONTROL_ALLOW),
++			  DRM_UNLOCKED | DRM_CONTROL_ALLOW),
 +	DRM_IOCTL_DEF_DRV(RCAR_DU_CMM_GET_HGO, rcar_du_cmm_hgo_get,
-+		DRM_UNLOCKED | DRM_CONTROL_ALLOW),
++			  DRM_UNLOCKED | DRM_CONTROL_ALLOW),
 +	DRM_IOCTL_DEF_DRV(RCAR_DU_CMM_START_HGO, rcar_du_cmm_hgo_start,
-+		DRM_UNLOCKED | DRM_CONTROL_ALLOW),
++			  DRM_UNLOCKED | DRM_CONTROL_ALLOW),
 +	DRM_IOCTL_DEF_DRV(RCAR_DU_CMM_WAIT_EVENT, rcar_du_cmm_wait_event,
-+		DRM_UNLOCKED | DRM_CONTROL_ALLOW),
++			  DRM_UNLOCKED | DRM_CONTROL_ALLOW),
 +	DRM_IOCTL_DEF_DRV(RCAR_DU_CMM_CONFIG, rcar_du_cmm_config,
-+		DRM_UNLOCKED | DRM_CONTROL_ALLOW),
++			  DRM_UNLOCKED | DRM_CONTROL_ALLOW),
 +	DRM_IOCTL_DEF_DRV(RCAR_DU_CMM_SET_LUT, rcar_du_cmm_lut_set,
-+		DRM_UNLOCKED | DRM_CONTROL_ALLOW),
++			  DRM_UNLOCKED | DRM_CONTROL_ALLOW),
 +	DRM_IOCTL_DEF_DRV(RCAR_DU_CMM_ALLOC, rcar_du_cmm_alloc,
-+		DRM_UNLOCKED | DRM_CONTROL_ALLOW),
++			  DRM_UNLOCKED | DRM_CONTROL_ALLOW),
 +	DRM_IOCTL_DEF_DRV(RCAR_DU_CMM_FREE, rcar_du_cmm_free,
-+		DRM_UNLOCKED | DRM_CONTROL_ALLOW),
++			  DRM_UNLOCKED | DRM_CONTROL_ALLOW),
  };
  
  static const struct file_operations rcar_du_fops = {
-@@ -348,6 +374,8 @@ static void rcar_du_disable_vblank(struct drm_device *dev, unsigned int pipe)
+@@ -355,6 +381,8 @@ static void rcar_du_disable_vblank(struct drm_device *dev, unsigned int pipe)
  static struct drm_driver rcar_du_driver = {
  	.driver_features	= DRIVER_GEM | DRIVER_MODESET | DRIVER_PRIME
  				| DRIVER_ATOMIC,
@@ -1801,17 +2028,17 @@ index 67f336d..28e4ace 100644
  	.lastclose		= rcar_du_lastclose,
  	.get_vblank_counter	= drm_vblank_no_hw_counter,
  	.enable_vblank		= rcar_du_enable_vblank,
-@@ -405,6 +433,9 @@ static int rcar_du_pm_suspend(struct device *dev)
+@@ -412,6 +440,9 @@ static int rcar_du_pm_suspend(struct device *dev)
  	}
  #endif
  	for (i = 0; i < rcdu->num_crtcs; ++i) {
 +		if (rcar_du_has(rcdu, RCAR_DU_FEATURE_CMM))
 +			rcar_du_cmm_pm_suspend(&rcdu->crtcs[i]);
 +
- 		if (rcdu->crtcs[i].started) {
+ 		if (rcdu->crtcs[i].initialized) {
  			rcar_du_crtc_suspend(&rcdu->crtcs[i]);
  			clk_set_rate(rcdu->crtcs[i].extclock, 0);
-@@ -423,9 +454,13 @@ static int rcar_du_pm_resume(struct device *dev)
+@@ -430,9 +461,13 @@ static int rcar_du_pm_resume(struct device *dev)
  
  	encoder = NULL;
  
@@ -1827,48 +2054,56 @@ index 67f336d..28e4ace 100644
  	list_for_each_entry(encoder,
  		&rcdu->ddev->mode_config.encoder_list, head) {
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_drv.h b/drivers/gpu/drm/rcar-du/rcar_du_drv.h
-index dea2aa7..d0edc7d 100644
+index 45d6e7e..8eb6af0 100644
 --- a/drivers/gpu/drm/rcar-du/rcar_du_drv.h
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_drv.h
-@@ -36,6 +36,10 @@
+@@ -41,8 +41,16 @@
  #define RCAR_DU_FEATURE_DIDSR2_REG	(1 << 4)	/* Has DIDSR2 register */
  #define RCAR_DU_FEATURE_VSPDL_SOURCE	(1 << 5)	/* Has VSPDL from VSP2 */
  
-+#define RCAR_DU_FEATURE_CMM		(1 << 10)	/* Has DEFR7 register & CMM */
-+#define RCAR_DU_FEATURE_CMM_LUT_DBUF	(1 << 11)	/* Has CMM LUT Double buffer */
-+#define RCAR_DU_FEATURE_CMM_CLU_DBUF	(1 << 12)	/* Has CMM CLU Double buffer */
-+
- #define RCAR_DU_QUIRK_ALIGN_128B	(1 << 0)	/* Align pitches to 128 bytes */
- #define RCAR_DU_QUIRK_LVDS_LANES	(1 << 1)	/* LVDS lanes 1 and 3 inverted */
+-#define RCAR_DU_QUIRK_ALIGN_128B	(1 << 0)	/* Align pitches to 128 bytes */
+-#define RCAR_DU_QUIRK_LVDS_LANES	(1 << 1)	/* LVDS lanes 1 and 3 inverted */
++/* Has DEF7R register & CMM */
++#define RCAR_DU_FEATURE_CMM		BIT(10)
++/* Has CMM LUT Double buffer */
++#define RCAR_DU_FEATURE_CMM_LUT_DBUF	BIT(11)
++/* Has CMM CLU Double buffer */
++#define RCAR_DU_FEATURE_CMM_CLU_DBUF	BIT(12)
++/* Align pitches to 128 bytes */
++#define RCAR_DU_QUIRK_ALIGN_128B	BIT(0)
++/* LVDS lanes 1 and 3 inverted */
++#define RCAR_DU_QUIRK_LVDS_LANES	BIT(1)
  
+ /*
+  * struct rcar_du_output_routing - Output routing specification
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_group.c b/drivers/gpu/drm/rcar-du/rcar_du_group.c
-index 254103f..71d6a9e 100644
+index ccf5159..69bdfd0 100644
 --- a/drivers/gpu/drm/rcar-du/rcar_du_group.c
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_group.c
-@@ -137,6 +137,11 @@ static void rcar_du_group_setup(struct rcar_du_group *rgrp)
+@@ -140,6 +140,11 @@ static void rcar_du_group_setup(struct rcar_du_group *rgrp)
  	if (rcdu->info->gen >= 3)
  		rcar_du_group_write(rgrp, DEFR10, DEFR10_CODE | DEFR10_DEFE10);
  
 +	if (rcar_du_has(rgrp->dev, RCAR_DU_FEATURE_CMM)) {
-+		rcar_du_group_write(rgrp, DEFR7,
-+			DEFR7_CODE | DEFR7_CMME1 | DEFR7_CMME0);
++		rcar_du_group_write(rgrp, DEF7R, DEF7R_CODE |
++				    DEF7R_CMME1 | DEF7R_CMME0);
 +	}
 +
  	/* Use DS1PR and DS2PR to configure planes priorities and connects the
  	 * superposition 0 to DU0 pins. DU1 pins will be configured dynamically.
  	 */
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_regs.h b/drivers/gpu/drm/rcar-du/rcar_du_regs.h
-index 4d43d93..fc3850e 100644
+index 4d43d93..51c5d1e 100644
 --- a/drivers/gpu/drm/rcar-du/rcar_du_regs.h
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_regs.h
 @@ -200,6 +200,11 @@
  #define DEFR6_MLOS1		(1 << 2)
  #define DEFR6_DEFAULT		(DEFR6_CODE | DEFR6_TCNE1)
  
-+#define DEFR7			0x000ec
-+#define DEFR7_CODE		(0x7779 << 16)
-+#define DEFR7_CMME1		(1 << 6)
-+#define DEFR7_CMME0		(1 << 4)
++#define DEF7R			0x000ec
++#define DEF7R_CODE		(0x7779 << 16)
++#define DEF7R_CMME1		BIT(6)
++#define DEF7R_CMME0		BIT(4)
 +
  /* -----------------------------------------------------------------------------
   * R8A7790-only Control Registers
@@ -1877,104 +2112,104 @@ index 4d43d93..fc3850e 100644
  #define GCBCR			0x11098
  #define BCBCR			0x1109c
  
-+
 +/* -----------------------------------------------------------------------------
 + * DU Color Management Module Registers
 + */
 +
-+#define CMM0_ADDR 0xFEA40000
-+#define CMM1_ADDR 0xFEA50000
-+#define CMM2_ADDR 0xFEA60000
-+#define CMM3_ADDR 0xFEA70000
++#define CMM_LUT_CTRL			0x0000
++#define CMM_LUT_CTRL_EN			BIT(0)
 +
-+#define CMM_SIZE  0x00001000
++#define CMM_CLU_CTRL			0x0100
++#define CMM_CLU_CTRL_EN			BIT(0)
++#define CMM_CLU_CTRL_MVS		BIT(24)
++#define CMM_CLU_CTRL_AAI		BIT(28)
 +
-+#define CMM_LUT_CTRL		0x0000
-+ #define CMM_LUT_CTRL_EN	(1 << 0)
-+#define CMM_CLU_CTRL		0x0100
-+ #define CMM_CLU_CTRL_EN	(1 << 0)
-+ #define CMM_CLU_CTRL_MVS	(1 << 24)
-+ #define CMM_CLU_CTRL_AAI	(1 << 28)
-+#define CMM_CTL0		0x0180
-+#define CM2_CTL0		CMM_CTL0
-+ #define CMM_CTL0_CLUDB		(1 << 24)
-+ #define CMM_CTL0_HISTS		(1 << 20)
-+ #define CMM_CTL0_TM1_MASK		(3 << 16)
-+ #define CMM_CTL0_TM1_BT601_YC240	(0 << 16)
-+ #define CMM_CTL0_TM1_BT601_YC255	(1 << 16)
-+ #define CMM_CTL0_TM1_BT709_RG255	(2 << 16)
-+ #define CMM_CTL0_TM1_BT709_RG235	(3 << 16)
-+ #define CMM_CTL0_TM0_MASK		(3 << 16)
-+ #define CMM_CTL0_TM0_BT601_YC240	(0 << 12)
-+ #define CMM_CTL0_TM0_BT601_YC255	(1 << 12)
-+ #define CMM_CTL0_TM0_BT709_RG255	(2 << 12)
-+ #define CMM_CTL0_TM0_BT709_RG235	(3 << 12)
-+ #define CMM_CTL0_TM_BT601_YC240	(CMM_CTL0_TM1_BT601_YC240 | CMM_CTL0_TM0_BT601_YC240)
-+ #define CMM_CTL0_TM_BT601_YC255	(CMM_CTL0_TM1_BT601_YC255 | CMM_CTL0_TM0_BT601_YC255)
-+ #define CMM_CTL0_TM_BT709_RG255	(CMM_CTL0_TM1_BT709_RG255 | CMM_CTL0_TM0_BT709_RG255)
-+ #define CMM_CTL0_TM_BT709_RG235	(CMM_CTL0_TM1_BT709_RG235 | CMM_CTL0_TM0_BT709_RG235)
-+ #define CMM_CTL0_CLUDB		(1 << 24)
-+ #define CMM_CTL0_YC		(1 << 8)
-+ #define CMM_CTL0_VPOL		(1 << 4)
-+ #define CMM_CTL0_DBUF		(1 << 0)
-+#define CMM_CTL1		0x0184
-+#define CM2_CTL1		CMM_CTL1
-+ #define CMM_CTL1_BFS		(1 << 0)
-+#define CMM_CTL2		0x0188
-+#define CMM_HGO_OFFSET		0x0200
-+#define CMM_HGO_SIZE		0x0204
-+#define CMM_HGO_MODE		0x0208
-+ #define CMM_HGO_MODE_MASK	(0xFF)
-+ #define CMM_HGO_MODE_MAXRGB	(1 << 7)
-+ #define CMM_HGO_MODE_OFSB_R	(1 << 6)
-+ #define CMM_HGO_MODE_OFSB_G	(1 << 5)
-+ #define CMM_HGO_MODE_OFSB_B	(1 << 4)
-+ #define CMM_HGO_MODE_HRATIO_NO_SKIPP	(0 << 2)
-+ #define CMM_HGO_MODE_HRATIO_HALF_SKIPP	(1 << 2)
-+ #define CMM_HGO_MODE_HRATIO_QUARTER_SKIPP	(2 << 2)
-+ #define CMM_HGO_MODE_VRATIO_NO_SKIPP	(0 << 0)
-+ #define CMM_HGO_MODE_VRATIO_HALF_SKIPP	(1 << 0)
-+ #define CMM_HGO_MODE_VRATIO_QUARTER_SKIPP	(2 << 0)
-+#define CMM_HGO_LB_TH		0x020C
-+#define CMM_HGO_LB0_H		0x0200
-+#define CMM_HGO_LB0_V		0x0214
-+#define CMM_HGO_LB1_H		0x0218
-+#define CMM_HGO_LB1_V		0x021C
-+#define CMM_HGO_LB2_H		0x0220
-+#define CMM_HGO_LB2_V		0x0224
-+#define CMM_HGO_LB3_H		0x0228
-+#define CMM_HGO_LB3_V		0x022C
-+#define CMM_HGO_R_HISTO_n(n)	(0x0230 + (n * 4))
-+#define CMM_HGO_R_MAXMIN	0x0330
-+#define CMM_HGO_R_SUM		0x0334
-+#define CMM_HGO_R_LB_DET	0x0338
-+#define CMM_HGO_G_HISTO_n(n)	(0x0340 + (n * 4))
-+#define CMM_HGO_G_MAXMIN	0x0440
-+#define CMM_HGO_G_SUM		0x0444
-+#define CMM_HGO_G_LB_DET	0x0448
-+#define CMM_HGO_B_HISTO_n(n)	(0x0450 + (4 * n))
-+#define CMM_HGO_B_MAXMIN	0x0550
-+#define CMM_HGO_B_SUM		0x0554
-+#define CMM_HGO_B_LB_DET	0x0558
-+#define CMM_HGO_REGRST		0x05FC
-+ #define CMM_HGO_REGRST_RCLEA	(1 << 0)
-+#define CMM_LUT_TBLA_n(n)	(0x0600 + (n * 4))
-+#define CMM_CLU_ADDR		0x0A00
-+#define CMM_CLU_DATA		0x0A04
-+#define CMM_LUT_TBLB_n(n)	(0x0B00 + (n * 4))
-+#define CMM_CLU_ADDR2		0x0F00
-+#define CMM_CLU_DATA2		0x0F04
++#define CMM_CTL0			0x0180
++#define CM2_CTL0			CMM_CTL0
++#define CMM_CTL0_CLUDB			BIT(24)
++#define CMM_CTL0_HISTS			BIT(20)
++#define CMM_CTL0_TM1_MASK		(3 << 16)
++#define CMM_CTL0_TM1_BT601_YC240	(0 << 16)
++#define CMM_CTL0_TM1_BT601_YC255	BIT(16)
++#define CMM_CTL0_TM1_BT709_RG255	(2 << 16)
++#define CMM_CTL0_TM1_BT709_RG235	(3 << 16)
++#define CMM_CTL0_TM0_MASK		(3 << 16)
++#define CMM_CTL0_TM0_BT601_YC240	(0 << 12)
++#define CMM_CTL0_TM0_BT601_YC255	BIT(12)
++#define CMM_CTL0_TM0_BT709_RG255	(2 << 12)
++#define CMM_CTL0_TM0_BT709_RG235	(3 << 12)
++#define CMM_CTL0_TM_BT601_YC240		(CMM_CTL0_TM1_BT601_YC240 |\
++					 CMM_CTL0_TM0_BT601_YC240)
++#define CMM_CTL0_TM_BT601_YC255		(CMM_CTL0_TM1_BT601_YC255 |\
++					 CMM_CTL0_TM0_BT601_YC255)
++#define CMM_CTL0_TM_BT709_RG255		(CMM_CTL0_TM1_BT709_RG255 |\
++					 CMM_CTL0_TM0_BT709_RG255)
++#define CMM_CTL0_TM_BT709_RG235		(CMM_CTL0_TM1_BT709_RG235 |\
++					 CMM_CTL0_TM0_BT709_RG235)
++#define CMM_CTL0_CLUDB			BIT(24)
++#define CMM_CTL0_YC			BIT(8)
++#define CMM_CTL0_VPOL			BIT(4)
++#define CMM_CTL0_DBUF			BIT(0)
++
++#define CMM_CTL1			0x0184
++#define CM2_CTL1			CMM_CTL1
++#define CMM_CTL1_BFS			BIT(0)
++
++#define CMM_CTL2			0x0188
++#define CMM_HGO_OFFSET			0x0200
++#define CMM_HGO_SIZE			0x0204
++#define CMM_HGO_MODE			0x0208
++#define CMM_HGO_MODE_MASK		(0xFF)
++#define CMM_HGO_MODE_MAXRGB		BIT(7)
++#define CMM_HGO_MODE_OFSB_R		BIT(6)
++#define CMM_HGO_MODE_OFSB_G		BIT(5)
++#define CMM_HGO_MODE_OFSB_B		BIT(4)
++#define CMM_HGO_MODE_HRATIO_NO_SKIPP		(0 << 2)
++#define CMM_HGO_MODE_HRATIO_HALF_SKIPP		BIT(2)
++#define CMM_HGO_MODE_HRATIO_QUARTER_SKIPP	(2 << 2)
++#define CMM_HGO_MODE_VRATIO_NO_SKIPP		(0 << 0)
++#define CMM_HGO_MODE_VRATIO_HALF_SKIPP		BIT(0)
++#define CMM_HGO_MODE_VRATIO_QUARTER_SKIPP	(2 << 0)
++#define CMM_HGO_LB_TH			0x020C
++#define CMM_HGO_LB0_H			0x0200
++#define CMM_HGO_LB0_V			0x0214
++#define CMM_HGO_LB1_H			0x0218
++#define CMM_HGO_LB1_V			0x021C
++#define CMM_HGO_LB2_H			0x0220
++#define CMM_HGO_LB2_V			0x0224
++#define CMM_HGO_LB3_H			0x0228
++#define CMM_HGO_LB3_V			0x022C
++#define CMM_HGO_R_HISTO(n)		(0x0230 + ((n) * 4))
++#define CMM_HGO_R_MAXMIN		0x0330
++#define CMM_HGO_R_SUM			0x0334
++#define CMM_HGO_R_LB_DET		0x0338
++#define CMM_HGO_G_HISTO(n)		(0x0340 + ((n) * 4))
++#define CMM_HGO_G_MAXMIN		0x0440
++#define CMM_HGO_G_SUM			0x0444
++#define CMM_HGO_G_LB_DET		0x0448
++#define CMM_HGO_B_HISTO(n)		(0x0450 + ((n) * 4))
++#define CMM_HGO_B_MAXMIN		0x0550
++#define CMM_HGO_B_SUM			0x0554
++#define CMM_HGO_B_LB_DET		0x0558
++#define CMM_HGO_REGRST			0x05FC
++#define CMM_HGO_REGRST_RCLEA		BIT(0)
++#define CMM_LUT_TBLA(n)			(0x0600 + ((n) * 4))
++#define CMM_CLU_ADDR			0x0A00
++#define CMM_CLU_DATA			0x0A04
++#define CMM_LUT_TBLB(n)			(0x0B00 + ((n) * 4))
++#define CMM_CLU_ADDR2			0x0F00
++#define CMM_CLU_DATA2			0x0F04
 +
  #endif /* __RCAR_DU_REGS_H__ */
 diff --git a/include/uapi/drm/rcar_du_drm.h b/include/uapi/drm/rcar_du_drm.h
-index b695b8b2a..f80a188 100644
+index b695b8b2a..b14be58 100644
 --- a/include/uapi/drm/rcar_du_drm.h
 +++ b/include/uapi/drm/rcar_du_drm.h
-@@ -27,10 +27,109 @@ struct rcar_du_screen_shot {
+@@ -27,10 +27,105 @@ struct rcar_du_screen_shot {
  	unsigned int	height;
  };
  
-+
++/* DRM_RCAR_DU_CMM_SET_LUT, DU-CMM set LUT */
 +/* DRM_RCAR_DU_CMM_SET_CLU: DU-CMM set CLU */
 +/* DRM_RCAR_DU_CMM_GET_HGO: DU-CMM get histogram */
 +struct rcar_du_cmm_table {
@@ -2025,8 +2260,6 @@ index b695b8b2a..f80a188 100644
 +#define CMM_EVENT_HGO_START	3
 +#define CMM_EVENT_LUT_DONE	4
 +
-+
-+
 +/* DRM_RCAR_DU_CMM_SET_HGO: DU-CMM set HGO mode */
 +#define HGO_MODE_MAXRGB			(1 << 7)
 +#define HGO_MODE_OFSB_R			(1 << 6)
@@ -2041,7 +2274,6 @@ index b695b8b2a..f80a188 100644
 +
 +#define HGO_CTRL_BEFORE_CLU		(0 << 0)
 +#define HGO_CTRL_BEFORE_LUT		(1 << 0)
-+
 +
 +/* DRM_RCAR_DU_CMM_CONFIG: DU-CMM config */
 +#define CSC_CONVERT_NONE		0
@@ -2059,7 +2291,6 @@ index b695b8b2a..f80a188 100644
 +#define CLU_DOUBLE_BUFFER_A		1
 +#define CLU_DOUBLE_BUFFER_B		2
 +#define CLU_SINGLE_BUFFER		3
-+
 +
  /* rcar-du + vspd specific ioctls */
  #define DRM_RCAR_DU_SET_VMUTE		0
@@ -2080,7 +2311,7 @@ index b695b8b2a..f80a188 100644
  #define DRM_IOCTL_RCAR_DU_SET_VMUTE \
  	DRM_IOW(DRM_COMMAND_BASE + DRM_RCAR_DU_SET_VMUTE, \
  		struct rcar_du_vmute)
-@@ -38,5 +137,41 @@ struct rcar_du_screen_shot {
+@@ -38,5 +133,41 @@ struct rcar_du_screen_shot {
  #define DRM_IOCTL_RCAR_DU_SCRSHOT \
  	DRM_IOW(DRM_COMMAND_BASE + DRM_RCAR_DU_SCRSHOT, \
  		struct rcar_du_screen_shot)
