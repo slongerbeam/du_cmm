@@ -1,6 +1,6 @@
-From 2f903724572c6c00eab52742cc9482689e583403 Mon Sep 17 00:00:00 2001
+From 928de551f70dda4cf4d4662cc7d40a9fa3614082 Mon Sep 17 00:00:00 2001
 From: Takashi Saito <takashi.saitou.ry@renesas.com>
-Date: Wed, 12 Jul 2017 09:32:12 +0900
+Date: Fri, 21 Jul 2017 19:36:33 +0900
 Subject: [PATCH] drm: rcar-du: Add DU CMM support
 
 Reported-by: agheorghe <Alexandru_Gheorghe@mentor.com>
@@ -19,15 +19,15 @@ Signed-off-by: Koji Matsuoka <koji.matsuoka.xm@renesas.com>
  drivers/clk/renesas/r8a7795-cpg-mssr.c             |    4 +
  drivers/clk/renesas/r8a7796-cpg-mssr.c             |    4 +
  drivers/gpu/drm/rcar-du/Makefile                   |    2 +
- drivers/gpu/drm/rcar-du/rcar_du_cmm.c              | 1545 ++++++++++++++++++++
+ drivers/gpu/drm/rcar-du/rcar_du_cmm.c              | 1548 ++++++++++++++++++++
  drivers/gpu/drm/rcar-du/rcar_du_crtc.c             |   31 +-
  drivers/gpu/drm/rcar-du/rcar_du_crtc.h             |   32 +
  drivers/gpu/drm/rcar-du/rcar_du_drv.c              |   45 +-
  drivers/gpu/drm/rcar-du/rcar_du_drv.h              |   12 +-
  drivers/gpu/drm/rcar-du/rcar_du_group.c            |    5 +
- drivers/gpu/drm/rcar-du/rcar_du_regs.h             |   93 ++
+ drivers/gpu/drm/rcar-du/rcar_du_regs.h             |   92 ++
  include/uapi/drm/rcar_du_drm.h                     |  131 ++
- 19 files changed, 1960 insertions(+), 28 deletions(-)
+ 19 files changed, 1962 insertions(+), 28 deletions(-)
  create mode 100644 drivers/gpu/drm/rcar-du/rcar_du_cmm.c
 
 diff --git a/arch/arm64/boot/dts/renesas/r8a7795-es1-salvator-x.dts b/arch/arm64/boot/dts/renesas/r8a7795-es1-salvator-x.dts
@@ -273,10 +273,10 @@ index 4666821..8846f1f 100644
  rcar-du-drm-$(CONFIG_DRM_RCAR_LVDS)	+= rcar_du_lvdsenc.o \
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_cmm.c b/drivers/gpu/drm/rcar-du/rcar_du_cmm.c
 new file mode 100644
-index 0000000..880437b
+index 0000000..8f911be
 --- /dev/null
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_cmm.c
-@@ -0,0 +1,1545 @@
+@@ -0,0 +1,1548 @@
 +/*************************************************************************/ /*
 + DU CMM
 +
@@ -1364,8 +1364,8 @@ index 0000000..880437b
 +	for (i = 0; i < 17; i++) {
 +		for (j = 0; j < 17; j++) {
 +			for (k = 0; k < 17; k++) {
-+				rcar_du_cmm_write(du_cmm, src_addr, (i << 16) |
-+						  (j << 8) | (k << 0));
++				rcar_du_cmm_write(du_cmm, src_addr,
++					(k << 16) | (j << 8) | (i << 0));
 +				rcar_du_cmm_write(du_cmm, dst_data,
 +						  rcar_du_cmm_read(du_cmm,
 +								   src_data));
@@ -1586,6 +1586,9 @@ index 0000000..880437b
 +	int i, j, k, index;
 +	int ret;
 +
++	if (!du_cmm)
++		return 0;
++
 +	ret = wait_event_timeout(du_cmm->reg_save.wait,
 +				 du_cmm_que_empty(du_cmm),
 +				 msecs_to_jiffies(500));
@@ -1611,8 +1614,8 @@ index 0000000..880437b
 +		for (j = 0; j < 17; j++) {
 +			for (k = 0; k < 17; k++) {
 +				rcar_du_cmm_write(du_cmm, CMM_CLU_ADDR,
-+						  (i << 16) | (j << 8) |
-+						  (k << 0));
++						  (k << 16) | (j << 8) |
++						  (i << 0));
 +				du_cmm->reg_save.clu_table[index++] =
 +					rcar_du_cmm_read(du_cmm, CMM_CLU_DATA);
 +			}
@@ -2093,7 +2096,7 @@ index ccf5159..69bdfd0 100644
  	 * superposition 0 to DU0 pins. DU1 pins will be configured dynamically.
  	 */
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_regs.h b/drivers/gpu/drm/rcar-du/rcar_du_regs.h
-index 4d43d93..51c5d1e 100644
+index 4d43d93..4796cc4 100644
 --- a/drivers/gpu/drm/rcar-du/rcar_du_regs.h
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_regs.h
 @@ -200,6 +200,11 @@
@@ -2108,7 +2111,7 @@ index 4d43d93..51c5d1e 100644
  /* -----------------------------------------------------------------------------
   * R8A7790-only Control Registers
   */
-@@ -550,4 +555,92 @@
+@@ -550,4 +555,91 @@
  #define GCBCR			0x11098
  #define BCBCR			0x1109c
  
@@ -2146,7 +2149,6 @@ index 4d43d93..51c5d1e 100644
 +					 CMM_CTL0_TM0_BT709_RG255)
 +#define CMM_CTL0_TM_BT709_RG235		(CMM_CTL0_TM1_BT709_RG235 |\
 +					 CMM_CTL0_TM0_BT709_RG235)
-+#define CMM_CTL0_CLUDB			BIT(24)
 +#define CMM_CTL0_YC			BIT(8)
 +#define CMM_CTL0_VPOL			BIT(4)
 +#define CMM_CTL0_DBUF			BIT(0)
@@ -2171,7 +2173,7 @@ index 4d43d93..51c5d1e 100644
 +#define CMM_HGO_MODE_VRATIO_HALF_SKIPP		BIT(0)
 +#define CMM_HGO_MODE_VRATIO_QUARTER_SKIPP	(2 << 0)
 +#define CMM_HGO_LB_TH			0x020C
-+#define CMM_HGO_LB0_H			0x0200
++#define CMM_HGO_LB0_H			0x0210
 +#define CMM_HGO_LB0_V			0x0214
 +#define CMM_HGO_LB1_H			0x0218
 +#define CMM_HGO_LB1_V			0x021C
