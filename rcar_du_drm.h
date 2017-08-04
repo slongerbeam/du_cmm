@@ -1,5 +1,5 @@
 /* 
- * Copyright (c) 2016 Renesas Electronics Corporation
+ * Copyright (c) 2016-2017 Renesas Electronics Corporation
  * Released under the MIT license
  * http://opensource.org/licenses/mit-license.php
  */
@@ -54,10 +54,7 @@ struct rcar_du_cmm_buf {
 /* DRM_RCAR_DU_CMM_WAIT_EVENT: DU-CMM done event */
 #define CMM_EVENT_CLU_DONE	1
 #define CMM_EVENT_HGO_DONE	2
-#define CMM_EVENT_HGO_START	3
-#define CMM_EVENT_LUT_DONE	4
-
-
+#define CMM_EVENT_LUT_DONE	3
 
 /* DRM_RCAR_DU_CMM_SET_HGO: DU-CMM set HGO mode */
 #define HGO_MODE_MAXRGB			(1 << 7)
@@ -73,7 +70,6 @@ struct rcar_du_cmm_buf {
 
 #define HGO_CTRL_BEFORE_CLU		(0 << 0)
 #define HGO_CTRL_BEFORE_LUT		(1 << 0)
-
 
 /* DRM_RCAR_DU_CMM_CONFIG: DU-CMM config */
 #define CSC_CONVERT_NONE		0
@@ -91,7 +87,6 @@ struct rcar_du_cmm_buf {
 #define CLU_DOUBLE_BUFFER_A		1
 #define CLU_DOUBLE_BUFFER_B		2
 #define CLU_SINGLE_BUFFER		3
-
 
 /* rcar-du + vspd specific ioctls */
 /* DU-CMM ioctl */

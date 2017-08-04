@@ -1,6 +1,6 @@
-From 928de551f70dda4cf4d4662cc7d40a9fa3614082 Mon Sep 17 00:00:00 2001
+From 7b1f4997dce59a015128d8c8747613ae72d5e8a8 Mon Sep 17 00:00:00 2001
 From: Takashi Saito <takashi.saitou.ry@renesas.com>
-Date: Fri, 21 Jul 2017 19:36:33 +0900
+Date: Fri, 4 Aug 2017 17:50:25 +0900
 Subject: [PATCH] drm: rcar-du: Add DU CMM support
 
 Reported-by: agheorghe <Alexandru_Gheorghe@mentor.com>
@@ -19,15 +19,15 @@ Signed-off-by: Koji Matsuoka <koji.matsuoka.xm@renesas.com>
  drivers/clk/renesas/r8a7795-cpg-mssr.c             |    4 +
  drivers/clk/renesas/r8a7796-cpg-mssr.c             |    4 +
  drivers/gpu/drm/rcar-du/Makefile                   |    2 +
- drivers/gpu/drm/rcar-du/rcar_du_cmm.c              | 1548 ++++++++++++++++++++
+ drivers/gpu/drm/rcar-du/rcar_du_cmm.c              | 1516 ++++++++++++++++++++
  drivers/gpu/drm/rcar-du/rcar_du_crtc.c             |   31 +-
  drivers/gpu/drm/rcar-du/rcar_du_crtc.h             |   32 +
  drivers/gpu/drm/rcar-du/rcar_du_drv.c              |   45 +-
  drivers/gpu/drm/rcar-du/rcar_du_drv.h              |   12 +-
  drivers/gpu/drm/rcar-du/rcar_du_group.c            |    5 +
  drivers/gpu/drm/rcar-du/rcar_du_regs.h             |   92 ++
- include/uapi/drm/rcar_du_drm.h                     |  131 ++
- 19 files changed, 1962 insertions(+), 28 deletions(-)
+ include/uapi/drm/rcar_du_drm.h                     |  130 ++
+ 19 files changed, 1929 insertions(+), 28 deletions(-)
  create mode 100644 drivers/gpu/drm/rcar-du/rcar_du_cmm.c
 
 diff --git a/arch/arm64/boot/dts/renesas/r8a7795-es1-salvator-x.dts b/arch/arm64/boot/dts/renesas/r8a7795-es1-salvator-x.dts
@@ -273,10 +273,10 @@ index 4666821..8846f1f 100644
  rcar-du-drm-$(CONFIG_DRM_RCAR_LVDS)	+= rcar_du_lvdsenc.o \
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_cmm.c b/drivers/gpu/drm/rcar-du/rcar_du_cmm.c
 new file mode 100644
-index 0000000..8f911be
+index 0000000..53e8ba6
 --- /dev/null
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_cmm.c
-@@ -0,0 +1,1548 @@
+@@ -0,0 +1,1516 @@
 +/*************************************************************************/ /*
 + DU CMM
 +
@@ -786,8 +786,7 @@ index 0000000..8f911be
 +	struct rcar_du_cmm_table *table = (struct rcar_du_cmm_table *)data;
 +	struct rcar_du_cmm_file_priv *fpriv = file_priv->driver_priv;
 +	struct rcar_du_cmm *du_cmm;
-+	int ret = 0;
-+	struct rcar_du_cmm_pending_event *p[2];
++	struct rcar_du_cmm_pending_event *p;
 +	struct drm_gem_object *gem_obj;
 +
 +	du_cmm = id_to_cmm(dev, table->crtc_id);
@@ -801,56 +800,31 @@ index 0000000..8f911be
 +	if (!gem_obj)
 +		return -ENOMEM;
 +
-+	p[0] = kzalloc(sizeof(*p[0]), GFP_KERNEL);
-+	if (!p[0]) {
-+		ret = -ENOMEM;
-+		goto error_alloc1;
++	p = kzalloc(sizeof(*p), GFP_KERNEL);
++	if (!p) {
++		drm_gem_object_unreference_unlocked(gem_obj);
++		return -ENOMEM;
 +	}
-+
-+	p[1] = kzalloc(sizeof(*p[1]), GFP_KERNEL);
-+	if (!p[1]) {
-+		ret = -ENOMEM;
-+		goto error_alloc2;
-+	}
-+
-+	/* histogram read start event */
-+	p[0]->gem_obj = NULL;
-+	p[0]->event = CMM_EVENT_HGO_START;
-+	p[0]->stat = QUE_STAT_PENDING;
-+	p[0]->callback_data = table->user_data;
-+	p[0]->du_cmm = du_cmm;
-+	p[0]->fpriv = fpriv;
 +
 +	/* histogram read end event */
-+	p[1]->gem_obj = gem_obj;
-+	p[1]->event = CMM_EVENT_HGO_DONE;
-+	p[1]->stat = QUE_STAT_PENDING;
-+	p[1]->callback_data = table->user_data;
-+	p[1]->du_cmm = du_cmm;
-+	p[1]->fpriv = fpriv;
++	p->gem_obj = gem_obj;
++	p->event = CMM_EVENT_HGO_DONE;
++	p->stat = QUE_STAT_PENDING;
++	p->callback_data = table->user_data;
++	p->du_cmm = du_cmm;
++	p->fpriv = fpriv;
 +
 +	mutex_lock(&cmm_event_lock);
 +
-+	list_add_tail(&p[0]->link, &du_cmm->hgo.list);
-+	list_add_tail(&p[0]->fpriv_link, &fpriv->list);
-+
-+	list_add_tail(&p[1]->link, &du_cmm->hgo.list);
-+	list_add_tail(&p[1]->fpriv_link, &fpriv->list);
++	list_add_tail(&p->link, &du_cmm->hgo.list);
++	list_add_tail(&p->fpriv_link, &fpriv->list);
 +
 +	mutex_unlock(&cmm_event_lock);
 +
 +	/* start DU Vsync interrupt */
 +	drm_crtc_vblank_get(&du_cmm->rcrtc->crtc);
-+	drm_crtc_vblank_get(&du_cmm->rcrtc->crtc);
 +
 +	return 0;
-+
-+error_alloc2:
-+	kfree(p[0]);
-+error_alloc1:
-+	drm_gem_object_unreference_unlocked(gem_obj);
-+
-+	return ret;
 +}
 +
 +int rcar_du_cmm_hgo_start(struct drm_device *dev, void *data,
@@ -1186,7 +1160,6 @@ index 0000000..8f911be
 +			bool table_copy;
 +		};
 +		struct {
-+			struct rcar_du_cmm_pending_event *p1;
 +			struct rcar_du_cmm_pending_event *p2;
 +			bool reset;
 +		};
@@ -1365,7 +1338,8 @@ index 0000000..8f911be
 +		for (j = 0; j < 17; j++) {
 +			for (k = 0; k < 17; k++) {
 +				rcar_du_cmm_write(du_cmm, src_addr,
-+					(k << 16) | (j << 8) | (i << 0));
++						  (k << 16) | (j << 8) |
++						  (i << 0));
 +				rcar_du_cmm_write(du_cmm, dst_data,
 +						  rcar_du_cmm_read(du_cmm,
 +								   src_data));
@@ -1427,13 +1401,10 @@ index 0000000..8f911be
 +static int hgo_pop_locked(struct rcar_du_cmm *du_cmm,
 +			  struct rcar_du_cmm_work_stat *stat)
 +{
-+	struct rcar_du_cmm_pending_event *_p[2] = {NULL, };
-+	int i;
++	struct rcar_du_cmm_pending_event *_p = NULL;
 +
-+	if (!list_empty(&du_cmm->hgo.list)) {
-+		for (i = 0; i < 2; i++)
-+			_p[i] = event_pop_locked(&du_cmm->hgo);
-+	}
++	if (!list_empty(&du_cmm->hgo.list))
++		_p = event_pop_locked(&du_cmm->hgo);
 +
 +	if (du_cmm->hgo.reset) {
 +		drm_crtc_vblank_put(&du_cmm->rcrtc->crtc);
@@ -1443,8 +1414,7 @@ index 0000000..8f911be
 +		stat->reset = false;
 +	}
 +
-+	stat->p1 = _p[0];
-+	stat->p2 = _p[1];
++	stat->p2 = _p;
 +
 +	return 0;
 +}
@@ -1461,14 +1431,12 @@ index 0000000..8f911be
 +	};
 +	void *vaddr;
 +
-+	if (!stat->p1) {
++	if (!stat->p2) {
 +		if (stat->reset)
 +			goto hgo_reset;
 +
 +		return 0; /* skip */
 +	}
-+
-+	event_done(stat->p1);
 +
 +	vaddr = gem_to_vaddr(stat->p2->gem_obj);
 +	for (i = 0; i < 3; i++) {
@@ -1549,7 +1517,7 @@ index 0000000..8f911be
 +			dev_info(rcdu->dev, "LUT %ld usec.\n", lut_time);
 +		if (s_clu.p)
 +			dev_info(rcdu->dev, "LUT %ld usec.\n", clu_time);
-+		if (s_hgo.p1)
++		if (s_hgo.p2)
 +			dev_info(rcdu->dev, "HGO %ld usec.\n", hgo_time);
 +	}
 +#endif
@@ -1826,10 +1794,10 @@ index 0000000..8f911be
 +	return ret;
 +}
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_crtc.c b/drivers/gpu/drm/rcar-du/rcar_du_crtc.c
-index e54fa74..92a800c 100644
+index eef102d..060d51a 100644
 --- a/drivers/gpu/drm/rcar-du/rcar_du_crtc.c
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_crtc.c
-@@ -277,9 +277,20 @@ static void rcar_du_crtc_set_display_timing(struct rcar_du_crtc *rcrtc)
+@@ -284,9 +284,20 @@ static void rcar_du_crtc_set_display_timing(struct rcar_du_crtc *rcrtc)
  	rcar_du_crtc_write(rcrtc, DSMR, value);
  
  	/* Display timings */
@@ -1853,7 +1821,7 @@ index e54fa74..92a800c 100644
  	rcar_du_crtc_write(rcrtc, HSWR, mode->hsync_end -
  					mode->hsync_start - 1);
  	rcar_du_crtc_write(rcrtc, HCR,  mode->htotal - 1);
-@@ -510,12 +521,18 @@ static void rcar_du_crtc_start(struct rcar_du_crtc *rcrtc)
+@@ -522,12 +533,18 @@ static void rcar_du_crtc_start(struct rcar_du_crtc *rcrtc)
  
  	rcar_du_group_start_stop(rcrtc->group, true, rcrtc);
  	rcar_du_crtc_vbk_check(rcrtc);
@@ -1872,7 +1840,7 @@ index e54fa74..92a800c 100644
  	/* Disable all planes and wait for the change to take effect. This is
  	 * required as the DSnPR registers are updated on vblank, and no vblank
  	 * will occur once the CRTC is stopped. Disabling planes when starting
-@@ -744,6 +761,9 @@ static irqreturn_t rcar_du_crtc_irq(int irq, void *arg)
+@@ -756,6 +773,9 @@ static irqreturn_t rcar_du_crtc_irq(int irq, void *arg)
  			rcar_du_crtc_finish_page_flip(rcrtc);
  		}
  
@@ -1882,7 +1850,7 @@ index e54fa74..92a800c 100644
  		ret = IRQ_HANDLED;
  	}
  
-@@ -843,7 +863,8 @@ int rcar_du_crtc_create(struct rcar_du_group *rgrp, unsigned int index)
+@@ -855,7 +875,8 @@ int rcar_du_crtc_create(struct rcar_du_group *rgrp, unsigned int index)
  	 *
  	 * Do not register the IRQ handler in this instance.
  	 */
@@ -1892,7 +1860,7 @@ index e54fa74..92a800c 100644
  		return 0;
  
  	/* Register the interrupt handler. */
-@@ -868,6 +889,8 @@ int rcar_du_crtc_create(struct rcar_du_group *rgrp, unsigned int index)
+@@ -880,6 +901,8 @@ int rcar_du_crtc_create(struct rcar_du_group *rgrp, unsigned int index)
  		return ret;
  	}
  
@@ -2096,7 +2064,7 @@ index ccf5159..69bdfd0 100644
  	 * superposition 0 to DU0 pins. DU1 pins will be configured dynamically.
  	 */
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_regs.h b/drivers/gpu/drm/rcar-du/rcar_du_regs.h
-index 4d43d93..4796cc4 100644
+index 4d43d93..59f4df6 100644
 --- a/drivers/gpu/drm/rcar-du/rcar_du_regs.h
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_regs.h
 @@ -200,6 +200,11 @@
@@ -2136,7 +2104,7 @@ index 4d43d93..4796cc4 100644
 +#define CMM_CTL0_TM1_BT601_YC255	BIT(16)
 +#define CMM_CTL0_TM1_BT709_RG255	(2 << 16)
 +#define CMM_CTL0_TM1_BT709_RG235	(3 << 16)
-+#define CMM_CTL0_TM0_MASK		(3 << 16)
++#define CMM_CTL0_TM0_MASK		(3 << 12)
 +#define CMM_CTL0_TM0_BT601_YC240	(0 << 12)
 +#define CMM_CTL0_TM0_BT601_YC255	BIT(12)
 +#define CMM_CTL0_TM0_BT709_RG255	(2 << 12)
@@ -2204,10 +2172,10 @@ index 4d43d93..4796cc4 100644
 +
  #endif /* __RCAR_DU_REGS_H__ */
 diff --git a/include/uapi/drm/rcar_du_drm.h b/include/uapi/drm/rcar_du_drm.h
-index b695b8b2a..b14be58 100644
+index b695b8b2a..fbbf540 100644
 --- a/include/uapi/drm/rcar_du_drm.h
 +++ b/include/uapi/drm/rcar_du_drm.h
-@@ -27,10 +27,105 @@ struct rcar_du_screen_shot {
+@@ -27,10 +27,104 @@ struct rcar_du_screen_shot {
  	unsigned int	height;
  };
  
@@ -2259,8 +2227,7 @@ index b695b8b2a..b14be58 100644
 +/* DRM_RCAR_DU_CMM_WAIT_EVENT: DU-CMM done event */
 +#define CMM_EVENT_CLU_DONE	1
 +#define CMM_EVENT_HGO_DONE	2
-+#define CMM_EVENT_HGO_START	3
-+#define CMM_EVENT_LUT_DONE	4
++#define CMM_EVENT_LUT_DONE	3
 +
 +/* DRM_RCAR_DU_CMM_SET_HGO: DU-CMM set HGO mode */
 +#define HGO_MODE_MAXRGB			(1 << 7)
@@ -2313,7 +2280,7 @@ index b695b8b2a..b14be58 100644
  #define DRM_IOCTL_RCAR_DU_SET_VMUTE \
  	DRM_IOW(DRM_COMMAND_BASE + DRM_RCAR_DU_SET_VMUTE, \
  		struct rcar_du_vmute)
-@@ -38,5 +133,41 @@ struct rcar_du_screen_shot {
+@@ -38,5 +132,41 @@ struct rcar_du_screen_shot {
  #define DRM_IOCTL_RCAR_DU_SCRSHOT \
  	DRM_IOW(DRM_COMMAND_BASE + DRM_RCAR_DU_SCRSHOT, \
  		struct rcar_du_screen_shot)
