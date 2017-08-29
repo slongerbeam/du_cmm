@@ -1,4 +1,4 @@
-From b602c1fc882777f9674aadc3d0f66c529bf46d90 Mon Sep 17 00:00:00 2001
+From 806e94f62dd467eed03e03d3728011f07cdddfc1 Mon Sep 17 00:00:00 2001
 From: Koji Matsuoka <koji.matsuoka.xm@renesas.com>
 Date: Tue, 29 Aug 2017 18:55:53 +0900
 Subject: [PATCH] drm: rcar-du: Add DU CMM support
@@ -267,7 +267,7 @@ index 4666821..8846f1f 100644
  rcar-du-drm-$(CONFIG_DRM_RCAR_LVDS)	+= rcar_du_lvdsenc.o \
 diff --git a/drivers/gpu/drm/rcar-du/rcar_du_cmm.c b/drivers/gpu/drm/rcar-du/rcar_du_cmm.c
 new file mode 100644
-index 0000000..53e8ba6
+index 0000000..8618927
 --- /dev/null
 +++ b/drivers/gpu/drm/rcar-du/rcar_du_cmm.c
 @@ -0,0 +1,1516 @@
@@ -852,7 +852,7 @@ index 0000000..53e8ba6
 +	*p = NULL;
 +	mutex_lock(&cmm_event_lock);
 +	list_for_each_entry(_p, cmm_done_list(du_cmm, fpriv), link) {
-+		if (_p->event == event_type) {
++		if (_p->event & event_type) {
 +			*p = _p;
 +			list_del(&_p->link);
 +			list_del(&_p->fpriv_link);
@@ -2186,7 +2186,7 @@ index 4d43d93..59f4df6 100644
 +
  #endif /* __RCAR_DU_REGS_H__ */
 diff --git a/include/uapi/drm/rcar_du_drm.h b/include/uapi/drm/rcar_du_drm.h
-index b695b8b2a..fbbf540 100644
+index b695b8b2a..d7867d5 100644
 --- a/include/uapi/drm/rcar_du_drm.h
 +++ b/include/uapi/drm/rcar_du_drm.h
 @@ -27,10 +27,104 @@ struct rcar_du_screen_shot {
@@ -2239,9 +2239,9 @@ index b695b8b2a..fbbf540 100644
 +};
 +
 +/* DRM_RCAR_DU_CMM_WAIT_EVENT: DU-CMM done event */
-+#define CMM_EVENT_CLU_DONE	1
-+#define CMM_EVENT_HGO_DONE	2
-+#define CMM_EVENT_LUT_DONE	3
++#define CMM_EVENT_CLU_DONE		(1 << 0)
++#define CMM_EVENT_HGO_DONE		(1 << 1)
++#define CMM_EVENT_LUT_DONE		(1 << 2)
 +
 +/* DRM_RCAR_DU_CMM_SET_HGO: DU-CMM set HGO mode */
 +#define HGO_MODE_MAXRGB			(1 << 7)
