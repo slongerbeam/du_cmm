@@ -1,11 +1,8 @@
-From 7b1f4997dce59a015128d8c8747613ae72d5e8a8 Mon Sep 17 00:00:00 2001
-From: Takashi Saito <takashi.saitou.ry@renesas.com>
-Date: Fri, 4 Aug 2017 17:50:25 +0900
+From 63a0ee4a5277cf1a950cab24f76905583c55879f Mon Sep 17 00:00:00 2001
+From: Koji Matsuoka <koji.matsuoka.xm@renesas.com>
+Date: Tue, 29 Aug 2017 18:55:53 +0900
 Subject: [PATCH] drm: rcar-du: Add DU CMM support
 
-Reported-by: agheorghe <Alexandru_Gheorghe@mentor.com>
-Reported-by: Tsutomu Muroya <muroya@ksk.co.jp>
-Signed-off-by: Takashi Saito <takashi.saitou.ry@renesas.com>
 Signed-off-by: Koji Matsuoka <koji.matsuoka.xm@renesas.com>
 ---
  .../boot/dts/renesas/r8a7795-es1-salvator-x.dts    |    6 +-
@@ -15,9 +12,9 @@ Signed-off-by: Koji Matsuoka <koji.matsuoka.xm@renesas.com>
  arch/arm64/boot/dts/renesas/r8a7795.dtsi           |   18 +-
  arch/arm64/boot/dts/renesas/r8a7796-salvator-x.dts |    6 +-
  .../arm64/boot/dts/renesas/r8a7796-salvator-xs.dts |    6 +-
- arch/arm64/boot/dts/renesas/r8a7796.dtsi           |   18 +-
+ arch/arm64/boot/dts/renesas/r8a7796.dtsi           |   16 +-
  drivers/clk/renesas/r8a7795-cpg-mssr.c             |    4 +
- drivers/clk/renesas/r8a7796-cpg-mssr.c             |    4 +
+ drivers/clk/renesas/r8a7796-cpg-mssr.c             |    3 +
  drivers/gpu/drm/rcar-du/Makefile                   |    2 +
  drivers/gpu/drm/rcar-du/rcar_du_cmm.c              | 1516 ++++++++++++++++++++
  drivers/gpu/drm/rcar-du/rcar_du_crtc.c             |   31 +-
@@ -27,7 +24,7 @@ Signed-off-by: Koji Matsuoka <koji.matsuoka.xm@renesas.com>
  drivers/gpu/drm/rcar-du/rcar_du_group.c            |    5 +
  drivers/gpu/drm/rcar-du/rcar_du_regs.h             |   92 ++
  include/uapi/drm/rcar_du_drm.h                     |  130 ++
- 19 files changed, 1929 insertions(+), 28 deletions(-)
+ 19 files changed, 1926 insertions(+), 28 deletions(-)
  create mode 100644 drivers/gpu/drm/rcar-du/rcar_du_cmm.c
 
 diff --git a/arch/arm64/boot/dts/renesas/r8a7795-es1-salvator-x.dts b/arch/arm64/boot/dts/renesas/r8a7795-es1-salvator-x.dts
@@ -48,7 +45,7 @@ index 819d9ab..3b25025 100644
  	backlight-gpios = <&gpio6 7 GPIO_ACTIVE_HIGH>;
  
 diff --git a/arch/arm64/boot/dts/renesas/r8a7795-es1.dtsi b/arch/arm64/boot/dts/renesas/r8a7795-es1.dtsi
-index 113b5c4..2b4823d 100644
+index 97db2d0..84390b1 100644
 --- a/arch/arm64/boot/dts/renesas/r8a7795-es1.dtsi
 +++ b/arch/arm64/boot/dts/renesas/r8a7795-es1.dtsi
 @@ -2939,8 +2939,13 @@
@@ -158,7 +155,7 @@ index c56a65e..f418002 100644
  
  			vsps = <&vspd0 &vspd1 &vspd2>;
 diff --git a/arch/arm64/boot/dts/renesas/r8a7796-salvator-x.dts b/arch/arm64/boot/dts/renesas/r8a7796-salvator-x.dts
-index 312a9e3..8a21ec0 100644
+index ac854db..4abc77c 100644
 --- a/arch/arm64/boot/dts/renesas/r8a7796-salvator-x.dts
 +++ b/arch/arm64/boot/dts/renesas/r8a7796-salvator-x.dts
 @@ -511,7 +511,11 @@
@@ -175,7 +172,7 @@ index 312a9e3..8a21ec0 100644
  	backlight-gpios = <&gpio6 7 GPIO_ACTIVE_HIGH>;
  
 diff --git a/arch/arm64/boot/dts/renesas/r8a7796-salvator-xs.dts b/arch/arm64/boot/dts/renesas/r8a7796-salvator-xs.dts
-index b14389d..5c55337 100644
+index 1fd2d10..8fcc204 100644
 --- a/arch/arm64/boot/dts/renesas/r8a7796-salvator-xs.dts
 +++ b/arch/arm64/boot/dts/renesas/r8a7796-salvator-xs.dts
 @@ -354,7 +354,11 @@
@@ -192,10 +189,10 @@ index b14389d..5c55337 100644
  	backlight-gpios = <&gpio6 7 GPIO_ACTIVE_HIGH>;
  
 diff --git a/arch/arm64/boot/dts/renesas/r8a7796.dtsi b/arch/arm64/boot/dts/renesas/r8a7796.dtsi
-index 0929d63..a44328b 100644
+index 7a6dc8d..4c99cfe 100644
 --- a/arch/arm64/boot/dts/renesas/r8a7796.dtsi
 +++ b/arch/arm64/boot/dts/renesas/r8a7796.dtsi
-@@ -2607,8 +2607,13 @@
+@@ -2607,8 +2607,12 @@
  		du: display@feb00000 {
  			compatible = "renesas,du-r8a7796";
  			reg = <0 0xfeb00000 0 0x70000>,
@@ -204,14 +201,13 @@ index 0929d63..a44328b 100644
 +			      <0 0xfeb90000 0 0x14>,
 +			      <0 0xfea40000 0 0x00001000>,
 +			      <0 0xfea50000 0 0x00001000>,
-+			      <0 0xfea60000 0 0x00001000>,
-+			      <0 0xfea70000 0 0x00001000>;
++			      <0 0xfea60000 0 0x00001000>;
 +			reg-names = "du", "lvds.0",
-+					"cmm.0", "cmm.1", "cmm.2", "cmm.3";
++					"cmm.0", "cmm.1", "cmm.2";
  			interrupts = <GIC_SPI 256 IRQ_TYPE_LEVEL_HIGH>,
  				     <GIC_SPI 268 IRQ_TYPE_LEVEL_HIGH>,
  				     <GIC_SPI 269 IRQ_TYPE_LEVEL_HIGH>;
-@@ -2618,9 +2623,14 @@
+@@ -2618,9 +2622,13 @@
  				 <&cpg CPG_MOD 727>,
  				 <&du_dotclkin0>,
  				 <&du_dotclkin1>,
@@ -219,12 +215,11 @@ index 0929d63..a44328b 100644
 +				 <&du_dotclkin2>,
 +				 <&cpg CPG_MOD 711>,
 +				 <&cpg CPG_MOD 710>,
-+				 <&cpg CPG_MOD 709>,
-+				 <&cpg CPG_MOD 708>;
++				 <&cpg CPG_MOD 709>;
  			clock-names = "du.0", "du.1", "du.2", "lvds.0",
 -				      "dclkin.0", "dclkin.1", "dclkin.2";
 +				      "dclkin.0", "dclkin.1", "dclkin.2",
-+				      "cmm.0", "cmm.1", "cmm.2", "cmm.3";
++				      "cmm.0", "cmm.1", "cmm.2";
  			status = "disabled";
  
  			vsps = <&vspd0 &vspd1 &vspd2>;
@@ -244,14 +239,13 @@ index 9e5abc3..3c0f642 100644
  	DEF_MOD("csi20",		 714,	R8A7795_CLK_CSI0),
  	DEF_MOD("csi41",		 715,	R8A7795_CLK_CSI0),
 diff --git a/drivers/clk/renesas/r8a7796-cpg-mssr.c b/drivers/clk/renesas/r8a7796-cpg-mssr.c
-index 015591e..227cc3db 100644
+index 015591e..268bcee 100644
 --- a/drivers/clk/renesas/r8a7796-cpg-mssr.c
 +++ b/drivers/clk/renesas/r8a7796-cpg-mssr.c
-@@ -187,6 +187,10 @@ enum clk_ids {
+@@ -187,6 +187,9 @@ enum clk_ids {
  	DEF_MOD("ehci1",		 702,	R8A7796_CLK_S3D4),
  	DEF_MOD("ehci0",		 703,	R8A7796_CLK_S3D4),
  	DEF_MOD("hsusb",		 704,	R8A7796_CLK_S3D4),
-+	DEF_MOD("cmm3",			 708,	R8A7796_CLK_S2D1),
 +	DEF_MOD("cmm2",			 709,	R8A7796_CLK_S2D1),
 +	DEF_MOD("cmm1",			 710,	R8A7796_CLK_S2D1),
 +	DEF_MOD("cmm0",			 711,	R8A7796_CLK_S2D1),
