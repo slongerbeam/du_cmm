@@ -52,9 +52,9 @@ struct rcar_du_cmm_buf {
 };
 
 /* DRM_RCAR_DU_CMM_WAIT_EVENT: DU-CMM done event */
-#define CMM_EVENT_CLU_DONE	1
-#define CMM_EVENT_HGO_DONE	2
-#define CMM_EVENT_LUT_DONE	3
+#define CMM_EVENT_CLU_DONE		(1 << 0)
+#define CMM_EVENT_HGO_DONE		(1 << 1)
+#define CMM_EVENT_LUT_DONE		(1 << 2)
 
 /* DRM_RCAR_DU_CMM_SET_HGO: DU-CMM set HGO mode */
 #define HGO_MODE_MAXRGB			(1 << 7)
