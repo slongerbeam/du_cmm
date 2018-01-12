@@ -6,7 +6,7 @@ These files extend libdrm and du driver.
 How to build
 
 1. Store files to Yocto project
-Store linux-renesas_4.6.bbappend to the following path.
+Store linux-renesas_4.14.bbappend to the following path.
 	/meta-rcar-gen3/recipes-kernel
 Store patches to the following path.
 	/meta-rcar-gen3/recipes-kernel/linux/linux-renesas/salvator-x
